@@ -107,6 +107,7 @@ async function fetchWithProgress(
 
 /* ---------- local cache (single-user, version-gated) ---------- */
 const CACHE_KEY = "ysite-cache-v1";
+const PREFS_KEY = "ysite-prefs-v1"; // UI prefs: composer open, view mode
 type CacheShape = { version: number; bookmarks: Bookmark[]; categories: Category[] };
 
 function readCache(): CacheShape | null {
@@ -168,6 +169,9 @@ export default function Home() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [activeCat, setActiveCat] = useState<number | "all" | "none">("all");
+  const [composerOpen, setComposerOpen] = useState(false); // add-link form collapsed by default
+  const [viewMode, setViewMode] = useState<"card" | "list">("card");
+  const prefsLoaded = useRef(false);
   const [newCatOpen, setNewCatOpen] = useState(false);
   const [newCatName, setNewCatName] = useState("");
   const [draggingId, setDraggingId] = useState<number | null>(null);
@@ -213,6 +217,26 @@ export default function Home() {
   const applyVersion = useCallback((v: unknown) => {
     if (typeof v === "number") setVersion(v);
   }, []);
+
+  /* ---------- UI prefs (composer open, view mode) ---------- */
+  useEffect(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+      if (typeof p.composerOpen === "boolean") setComposerOpen(p.composerOpen);
+      if (p.viewMode === "list" || p.viewMode === "card") setViewMode(p.viewMode);
+    } catch {
+      /* defaults */
+    }
+    prefsLoaded.current = true;
+  }, []);
+  useEffect(() => {
+    if (!prefsLoaded.current) return;
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ composerOpen, viewMode }));
+    } catch {
+      /* non-fatal */
+    }
+  }, [composerOpen, viewMode]);
 
   /* ---------- full load (only on cache miss / version mismatch) ---------- */
   const load = useCallback(async () => {
@@ -825,7 +849,18 @@ export default function Home() {
         </div>
       </header>
 
-      {/* composer */}
+      {/* composer (collapsed by default) */}
+      <button
+        type="button"
+        className={`composer-toggle${composerOpen ? " open" : ""}`}
+        onClick={() => setComposerOpen((o) => !o)}
+        aria-expanded={composerOpen}
+      >
+        <IconPlus />
+        <span>링크 추가</span>
+        <span className="composer-chevron">{composerOpen ? "▲" : "▼"}</span>
+      </button>
+      {composerOpen && (
       <form
         className="composer"
         onSubmit={(e) => {
@@ -869,6 +904,7 @@ export default function Home() {
           여러 카테고리를 지정할 수 있어요.
         </p>
       </form>
+      )}
 
       {/* category bar */}
       <div className="catbar">
@@ -961,6 +997,24 @@ export default function Home() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+        <div className="view-toggle" role="group" aria-label="보기 방식">
+          <button
+            type="button"
+            className={viewMode === "card" ? "active" : ""}
+            onClick={() => setViewMode("card")}
+            title="카드 보기"
+          >
+            ▦
+          </button>
+          <button
+            type="button"
+            className={viewMode === "list" ? "active" : ""}
+            onClick={() => setViewMode("list")}
+            title="리스트 보기"
+          >
+            ≣
+          </button>
+        </div>
         <span className="toolbar-label">
           {search.trim() &&
             (editingTrans ? (
@@ -1022,6 +1076,60 @@ export default function Home() {
               ? "다른 키워드로 검색해 보세요."
               : "위에 URL을 붙여넣거나 북마크 파일을 끌어다 놓아 보세요."}
           </p>
+        </div>
+      ) : viewMode === "list" ? (
+        <div className="list">
+          {filtered.map((b) => {
+            const isHtml = b.kind === "html";
+            const href = isHtml ? `/view/${b.id}` : b.url;
+            const label = isHtml ? "저장된 페이지" : hostOf(b.url);
+            return (
+              <a
+                key={b.id}
+                className={`row${draggingId === b.id ? " dragging" : ""}`}
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                draggable
+                onClick={(e) => {
+                  if (isHtml && !e.metaKey && !e.ctrlKey) {
+                    e.preventDefault();
+                    openDetail(b);
+                  }
+                }}
+                onDragStart={(e) => {
+                  setDraggingId(b.id);
+                  e.dataTransfer.effectAllowed = "link";
+                  e.dataTransfer.setData("text/plain", String(b.id));
+                }}
+                onDragEnd={() => {
+                  setDraggingId(null);
+                  setDragOverCat(null);
+                }}
+              >
+                <Favicon
+                  src={isHtml ? "" : resolveFavicon(b.url)}
+                  host={label}
+                  isHtml={isHtml}
+                  compact
+                />
+                <span className="row-title">{b.title || label}</span>
+                {isHtml && <span className="row-tag">HTML</span>}
+                <button
+                  className="row-del"
+                  title="삭제"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const name = b.title || label;
+                    if (confirm(`'${name}'을(를) 삭제할까요?`)) remove(b.id);
+                  }}
+                >
+                  <IconTrash />
+                </button>
+              </a>
+            );
+          })}
         </div>
       ) : (
         <div className="grid">
@@ -1215,14 +1323,18 @@ function Favicon({
   src,
   host,
   isHtml,
+  compact,
 }: {
   src: string;
   host: string;
   isHtml?: boolean;
+  compact?: boolean;
 }) {
   const [ok, setOk] = useState(true);
   return (
-    <div className={`card-fav${isHtml ? " is-html" : ""}`}>
+    <div
+      className={`card-fav${isHtml ? " is-html" : ""}${compact ? " is-compact" : ""}`}
+    >
       {isHtml ? (
         <IconFile />
       ) : src && ok ? (

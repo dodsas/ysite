@@ -101,6 +101,38 @@ body {
   letter-spacing: -0.02em;
 }
 
+/* ---------- composer toggle (collapsed by default) ---------- */
+.composer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 52px;
+  padding: 0 18px;
+  border: 1px dashed #d4cff0;
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--accent-deep);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s;
+}
+.composer-toggle:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.composer-toggle.open {
+  margin-bottom: 12px;
+  border-style: solid;
+}
+.composer-chevron {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
 /* ---------- composer ---------- */
 .composer {
   background: var(--surface);
@@ -338,6 +370,30 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-soft);
 }
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.view-toggle button {
+  width: 38px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 17px;
+  cursor: pointer;
+  transition: background 0.13s, color 0.13s;
+}
+.view-toggle button + button {
+  border-left: 1px solid var(--line);
+}
+.view-toggle button.active {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+}
 .toolbar-label {
   margin-left: auto;
   font-size: 13px;
@@ -346,6 +402,102 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+/* ---------- list (compact) view ---------- */
+.list {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  text-decoration: none;
+  color: inherit;
+  border-bottom: 1px solid var(--line);
+  transition: background 0.12s;
+  min-width: 0;
+}
+.row:last-child {
+  border-bottom: 0;
+}
+.row:hover {
+  background: var(--bg-tint);
+}
+.row.dragging {
+  opacity: 0.45;
+}
+.row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #c2410c;
+  background: #ffedd5;
+  border: 1px solid #fed7aa;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.row-del {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-faint);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, background 0.12s;
+}
+.row:hover .row-del {
+  opacity: 0.7;
+}
+.row-del:hover {
+  opacity: 1;
+  color: var(--danger);
+  background: #fdeef2;
+}
+.card-fav.is-compact {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+.card-fav.is-compact img {
+  width: 15px;
+  height: 15px;
+}
+.card-fav.is-compact span {
+  font-size: 12px;
+}
+.card-fav.is-compact svg {
+  width: 13px;
+  height: 13px;
+}
+/* touch devices: no hover, keep the delete affordance visible */
+@media (hover: none) {
+  .row-del {
+    opacity: 0.5;
+  }
 }
 .trans-badge {
   font-family: inherit;
@@ -810,5 +962,14 @@ body {
   .btn-primary {
     flex: 1;
     justify-content: center;
+  }
+  /* declutter on mobile: hide the marketing hero text */
+  .hero-eyebrow,
+  .hero-title,
+  .hero-sub {
+    display: none;
+  }
+  .hero {
+    margin-bottom: 16px;
   }
 }
