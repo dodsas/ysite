@@ -24,9 +24,15 @@ export async function GET(
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
+  // Uncompressed byte length so the client can show an accurate progress bar
+  // (Content-Length may reflect a compressed transfer size).
+  const rawBytes = new TextEncoder().encode(content).length;
+
   return new NextResponse(content, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
+      "X-Raw-Bytes": String(rawBytes),
+      "Access-Control-Expose-Headers": "X-Raw-Bytes",
       // Self-contained snapshot; let the browser cache it.
       "Cache-Control": "private, max-age=3600",
     },

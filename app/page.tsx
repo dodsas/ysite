@@ -74,6 +74,37 @@ async function clientTranslate(q: string): Promise<string> {
   }
 }
 
+// Download a URL while reporting progress. Uses X-Raw-Bytes (uncompressed
+// length) as the denominator; falls back to indeterminate (null) if unknown.
+async function fetchWithProgress(
+  url: string,
+  onProgress: (ratio: number | null) => void,
+): Promise<Blob> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(String(res.status));
+  const totalHdr =
+    res.headers.get("X-Raw-Bytes") || res.headers.get("Content-Length");
+  const total = totalHdr ? parseInt(totalHdr, 10) : 0;
+  if (!res.body) {
+    onProgress(1);
+    return res.blob();
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      received += value.length;
+      onProgress(total ? Math.min(1, received / total) : null);
+    }
+  }
+  onProgress(1);
+  return new Blob(chunks as BlobPart[], { type: "text/html" });
+}
+
 /* ---------- local cache (single-user, version-gated) ---------- */
 const CACHE_KEY = "ysite-cache-v1";
 type CacheShape = { version: number; bookmarks: Bookmark[]; categories: Category[] };
@@ -162,6 +193,11 @@ export default function Home() {
   const [editingTrans, setEditingTrans] = useState(false);
   const [transDraft, setTransDraft] = useState("");
   const transEscRef = useRef(false);
+  // Detail view for stored HTML pages (content downloaded on demand).
+  const [detail, setDetail] = useState<{ id: number; title: string } | null>(null);
+  const [detailUrl, setDetailUrl] = useState("");
+  const [detailProgress, setDetailProgress] = useState<number | null>(0);
+  const detailUrlRef = useRef("");
   const dragDepth = useRef(0);
   const lastFetchedUrl = useRef("");
   // Finder-style "slow double click" detector for renaming.
@@ -550,6 +586,51 @@ export default function Home() {
   );
 
   const cancelEdit = useCallback(() => setEditingId(null), []);
+
+  /* ---------- stored-page detail (on-demand download + progress) ---------- */
+  const closeDetail = useCallback(() => {
+    if (detailUrlRef.current) {
+      URL.revokeObjectURL(detailUrlRef.current);
+      detailUrlRef.current = "";
+    }
+    setDetail(null);
+    setDetailUrl("");
+    setDetailProgress(0);
+  }, []);
+
+  const openDetail = useCallback(
+    async (b: Bookmark) => {
+      if (detailUrlRef.current) {
+        URL.revokeObjectURL(detailUrlRef.current);
+        detailUrlRef.current = "";
+      }
+      setDetailUrl("");
+      setDetailProgress(0);
+      setDetail({ id: b.id, title: b.title || "저장된 페이지" });
+      try {
+        const blob = await fetchWithProgress(`/view/${b.id}`, (r) =>
+          setDetailProgress(r),
+        );
+        const objUrl = URL.createObjectURL(blob);
+        detailUrlRef.current = objUrl;
+        setDetailUrl(objUrl);
+      } catch {
+        showToast("페이지를 불러오지 못했어요");
+        setDetail(null);
+      }
+    },
+    [showToast],
+  );
+
+  // Esc closes the detail view.
+  useEffect(() => {
+    if (!detail) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeDetail();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detail, closeDetail]);
 
   /* ---------- import html files ---------- */
   const importFiles = useCallback(
@@ -956,6 +1037,14 @@ export default function Home() {
                 target="_blank"
                 rel="noopener noreferrer"
                 draggable
+                onClick={(e) => {
+                  // Stored pages open in an in-site detail view (downloaded on
+                  // demand). Ctrl/⌘-click still opens the raw page in a new tab.
+                  if (isHtml && !e.metaKey && !e.ctrlKey) {
+                    e.preventDefault();
+                    openDetail(b);
+                  }
+                }}
                 onDragStart={(e) => {
                   setDraggingId(b.id);
                   e.dataTransfer.effectAllowed = "link";
@@ -1062,6 +1151,57 @@ export default function Home() {
             <div className="big">📥</div>
             <h2>여기에 놓으세요</h2>
             <p>북마크 파일은 링크로, HTML 페이지는 통째로 저장합니다</p>
+          </div>
+        </div>
+      )}
+
+      {/* stored-page detail view */}
+      {detail && (
+        <div className="detail-overlay" onClick={closeDetail}>
+          <div className="detail-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="detail-head">
+              <span className="detail-title">{detail.title}</span>
+              <div className="detail-actions">
+                <a
+                  className="detail-btn"
+                  href={`/view/${detail.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  새 탭 ↗
+                </a>
+                <button className="detail-btn" onClick={closeDetail}>
+                  닫기 ✕
+                </button>
+              </div>
+            </div>
+            {detailUrl ? (
+              <iframe
+                className="detail-frame"
+                src={detailUrl}
+                sandbox="allow-scripts allow-popups allow-forms"
+                title={detail.title}
+              />
+            ) : (
+              <div className="detail-loading">
+                <div className="detail-spinner" />
+                <div className="detail-pct">
+                  {detailProgress == null
+                    ? "다운로드 중…"
+                    : `다운로드 중… ${Math.round((detailProgress ?? 0) * 100)}%`}
+                </div>
+                <div className="detail-bar">
+                  <div
+                    className={`detail-bar-fill${detailProgress == null ? " indet" : ""}`}
+                    style={
+                      detailProgress == null
+                        ? undefined
+                        : { width: `${Math.round(detailProgress * 100)}%` }
+                    }
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
