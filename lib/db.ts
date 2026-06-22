@@ -84,6 +84,18 @@ export function ensureSchema(): Promise<void> {
       await db.execute(
         "INSERT OR IGNORE INTO meta (key, value) VALUES ('version', 1)",
       );
+      // Translation cache (KO<->EN search). hits drives LFU eviction at 10k.
+      await db.execute(
+        `CREATE TABLE IF NOT EXISTS translations (
+          q TEXT PRIMARY KEY,
+          translated TEXT NOT NULL DEFAULT '',
+          hits INTEGER NOT NULL DEFAULT 1,
+          updated_at INTEGER NOT NULL
+        )`,
+      );
+      await db.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('tversion', 1)",
+      );
       // Migrate older tables created before these columns existed.
       for (const col of [
         "kind TEXT NOT NULL DEFAULT 'link'",
@@ -115,20 +127,22 @@ export function ensureSchema(): Promise<void> {
   return schemaReady;
 }
 
-/** Increment and return the data version. Call once per write. */
-export async function bumpVersion(): Promise<number> {
-  const rs = await getDb().execute(
-    `INSERT INTO meta (key, value) VALUES ('version', 1)
-     ON CONFLICT(key) DO UPDATE SET value = value + 1
-     RETURNING value`,
-  );
+/** Increment and return a version counter. Call once per write. */
+export async function bumpVersion(key = "version"): Promise<number> {
+  const rs = await getDb().execute({
+    sql: `INSERT INTO meta (key, value) VALUES (?, 1)
+          ON CONFLICT(key) DO UPDATE SET value = value + 1
+          RETURNING value`,
+    args: [key],
+  });
   return Number(rs.rows[0]?.value ?? 1);
 }
 
-/** Read the current data version (one-row read). */
-export async function getVersion(): Promise<number> {
-  const rs = await getDb().execute(
-    "SELECT value FROM meta WHERE key = 'version'",
-  );
+/** Read a version counter (one-row read). */
+export async function getVersion(key = "version"): Promise<number> {
+  const rs = await getDb().execute({
+    sql: "SELECT value FROM meta WHERE key = ?",
+    args: [key],
+  });
   return Number(rs.rows[0]?.value ?? 0);
 }

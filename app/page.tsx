@@ -97,6 +97,42 @@ function readCache(): CacheShape | null {
   return null;
 }
 
+/* ---------- search similarity ---------- */
+// Strip a simple English plural so "mails" also matches "mail". Fast (string
+// ops only); substring already covers singular→plural the other direction.
+function stem(t: string): string {
+  if (t.length > 4 && t.endsWith("es")) return t.slice(0, -2);
+  if (t.length > 3 && t.endsWith("s")) return t.slice(0, -1);
+  return t;
+}
+function buildTerms(q: string, alt: string): string[] {
+  const set = new Set<string>();
+  for (const raw of [q, alt]) {
+    if (!raw) continue;
+    set.add(raw);
+    const s = stem(raw);
+    if (s.length >= 2) set.add(s);
+  }
+  return [...set];
+}
+
+/* ---------- translation cache (client hash table) ---------- */
+const TRANS_CACHE_KEY = "ysite-trans-v1";
+function readTransCache(): { version: number; map: Record<string, string> } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(TRANS_CACHE_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (typeof d.version === "number" && d.map && typeof d.map === "object") {
+      return d as { version: number; map: Record<string, string> };
+    }
+  } catch {
+    /* ignore corrupt cache */
+  }
+  return null;
+}
+
 export default function Home() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -113,8 +149,12 @@ export default function Home() {
   const [fetchingTitle, setFetchingTitle] = useState(false);
   const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState("");
-  // search term -> opposite-language form (Papago); "" means none/unavailable.
+  // search term -> opposite-language form; "" means none/unavailable.
   const [transMap, setTransMap] = useState<Record<string, string>>({});
+  const [tversion, setTversion] = useState<number | null>(null);
+  const transMapRef = useRef<Record<string, string>>({});
+  // q -> { translated, hits } accumulated since the last upload.
+  const pendingTrans = useRef<Map<string, { t: string; hits: number }>>(new Map());
   const [dragging, setDragging] = useState(false);
   const [toast, setToast] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -190,6 +230,102 @@ export default function Home() {
       /* storage full / unavailable — non-fatal */
     }
   }, [version, bookmarks, categories]);
+
+  /* ---------- translation hash table sync ---------- */
+  // keep a ref mirror so unload/timeout handlers read the latest map
+  useEffect(() => {
+    transMapRef.current = transMap;
+  }, [transMap]);
+
+  // On mount: hydrate the translation cache from localStorage, then async-load
+  // the server table (only replacing when its version changed). Non-blocking.
+  useEffect(() => {
+    const cached = readTransCache();
+    if (cached) {
+      setTransMap((prev) => ({ ...cached.map, ...prev }));
+      setTversion(cached.version);
+    }
+    (async () => {
+      try {
+        const data = await fetch("/api/translations").then((r) => r.json());
+        if (typeof data.version === "number" && data.version !== cached?.version) {
+          const map: Record<string, string> = {};
+          for (const e of data.entries ?? []) map[e.q] = e.translated ?? "";
+          setTransMap((prev) => ({ ...map, ...prev }));
+          setTversion(data.version);
+        }
+      } catch {
+        /* offline / unavailable — cache still works */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist the hash table locally whenever it changes.
+  useEffect(() => {
+    if (tversion == null) return;
+    try {
+      localStorage.setItem(
+        TRANS_CACHE_KEY,
+        JSON.stringify({ version: tversion, map: transMap }),
+      );
+    } catch {
+      /* non-fatal */
+    }
+  }, [transMap, tversion]);
+
+  // Upload accumulated translations/hits in a batch (every 10 min + on exit).
+  const flushTrans = useCallback(async () => {
+    if (pendingTrans.current.size === 0) return;
+    const entries = [...pendingTrans.current].map(([q, v]) => ({
+      q,
+      translated: v.t,
+      hits: v.hits,
+    }));
+    pendingTrans.current = new Map();
+    try {
+      const data = await fetch("/api/translations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries }),
+      }).then((r) => r.json());
+      if (typeof data.version === "number") setTversion(data.version);
+    } catch {
+      /* dropped — will re-accumulate on future searches */
+    }
+  }, []);
+
+  useEffect(() => {
+    const id = window.setInterval(flushTrans, 10 * 60 * 1000);
+    // On exit, fire-and-forget via sendBeacon (survives page teardown).
+    const onExit = () => {
+      if (pendingTrans.current.size === 0) return;
+      const entries = [...pendingTrans.current].map(([q, v]) => ({
+        q,
+        translated: v.t,
+        hits: v.hits,
+      }));
+      pendingTrans.current = new Map();
+      try {
+        navigator.sendBeacon(
+          "/api/translations",
+          new Blob([JSON.stringify({ entries })], { type: "application/json" }),
+        );
+      } catch {
+        /* ignore */
+      }
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") onExit();
+    };
+    window.addEventListener("pagehide", onExit);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("pagehide", onExit);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [flushTrans]);
 
   /* ---------- auto title fetch (debounced) ---------- */
   useEffect(() => {
@@ -503,32 +639,37 @@ export default function Home() {
     };
   }, [importFiles]);
 
-  /* ---------- KO<->EN search expansion (Papago) ---------- */
+  /* ---------- KO<->EN search expansion + hit tracking ---------- */
   useEffect(() => {
     const q = search.trim().toLowerCase();
-    if (!q || transMap[q] !== undefined) return;
+    if (!q) return;
     const t = window.setTimeout(async () => {
-      let translated = "";
-      // Server first (uses a configured DeepL/Google key if present)…
-      try {
-        const res = await fetch(`/api/translate?q=${encodeURIComponent(q)}`);
-        const data = await res.json();
-        translated = data.translated || "";
-      } catch {
-        /* fall through to client-side */
+      let translated = transMapRef.current[q];
+      if (translated === undefined) {
+        // Not in the hash table → translate (server first, then browser).
+        let res = "";
+        try {
+          const r = await fetch(`/api/translate?q=${encodeURIComponent(q)}`);
+          res = (await r.json()).translated || "";
+        } catch {
+          /* fall through */
+        }
+        if (!res) res = await clientTranslate(q);
+        translated = (res || "").toLowerCase();
+        setTransMap((prev) => ({ ...prev, [q]: translated as string }));
       }
-      // …otherwise translate from the browser (user IP, not the worker's).
-      if (!translated) translated = await clientTranslate(q);
-      setTransMap((prev) => ({ ...prev, [q]: translated.toLowerCase() }));
+      // Record a hit (cached or fresh) for the next batched upload.
+      const cur = pendingTrans.current.get(q);
+      pendingTrans.current.set(q, { t: translated, hits: (cur?.hits ?? 0) + 1 });
     }, 350);
     return () => window.clearTimeout(t);
-  }, [search, transMap]);
+  }, [search]);
 
   /* ---------- filtered ---------- */
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const alt = transMap[q];
-    const terms = [q, alt].filter((t): t is string => !!t);
+    const alt = transMap[q] ?? "";
+    const terms = buildTerms(q, alt);
     return bookmarks.filter((b) => {
       const inCat =
         activeCat === "all"
@@ -566,7 +707,7 @@ export default function Home() {
             흩어진 링크를 <span className="accent">한 곳에</span>
           </h1>
           <p className="hero-sub">
-            URL만 붙여넣으면 제목을 자동으로 가져와요. 브라우저에서 내보낸 북마크
+            URL만 붙여넣으면 제목을 자동으로 가져와요. <br/>
             HTML 파일은 화면에 끌어다 놓기만 하면 됩니다.
           </p>
         </div>
