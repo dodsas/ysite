@@ -54,6 +54,26 @@ function resolveFavicon(url: string): string {
 
 const looksLikeUrl = (s: string) => /^(https?:\/\/)?[^\s.]+\.[^\s]{2,}/i.test(s.trim());
 
+// Browser-side KO<->EN translation fallback. Runs from the user's IP, so it
+// avoids the rate limits that block the worker's shared datacenter IP.
+// MyMemory is keyless and CORS-enabled.
+async function clientTranslate(q: string): Promise<string> {
+  const source = /[가-힣]/.test(q) ? "ko" : "en";
+  const target = source === "ko" ? "en" : "ko";
+  try {
+    const r = await fetch(
+      `https://api.mymemory.translated.net/get?q=${encodeURIComponent(q)}&langpair=${source}|${target}`,
+    );
+    const d = await r.json();
+    const t: string = d?.responseData?.translatedText ?? "";
+    // MyMemory echoes errors (e.g. "PLEASE SELECT...") in the text field.
+    if (/^[A-Z' .]+$/.test(t) && /PLEASE|INVALID|LIMIT|QUERY/i.test(t)) return "";
+    return t;
+  } catch {
+    return "";
+  }
+}
+
 /* ---------- local cache (single-user, version-gated) ---------- */
 const CACHE_KEY = "ysite-cache-v1";
 type CacheShape = { version: number; bookmarks: Bookmark[]; categories: Category[] };
@@ -488,16 +508,18 @@ export default function Home() {
     const q = search.trim().toLowerCase();
     if (!q || transMap[q] !== undefined) return;
     const t = window.setTimeout(async () => {
+      let translated = "";
+      // Server first (uses a configured DeepL/Google key if present)…
       try {
         const res = await fetch(`/api/translate?q=${encodeURIComponent(q)}`);
         const data = await res.json();
-        setTransMap((prev) => ({
-          ...prev,
-          [q]: (data.translated || "").toLowerCase(),
-        }));
+        translated = data.translated || "";
       } catch {
-        setTransMap((prev) => ({ ...prev, [q]: "" }));
+        /* fall through to client-side */
       }
+      // …otherwise translate from the browser (user IP, not the worker's).
+      if (!translated) translated = await clientTranslate(q);
+      setTransMap((prev) => ({ ...prev, [q]: translated.toLowerCase() }));
     }, 350);
     return () => window.clearTimeout(t);
   }, [search, transMap]);
