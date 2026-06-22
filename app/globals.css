@@ -957,19 +957,31 @@ body {
 
 @media (max-width: 560px) {
   .wrap {
-    padding: 32px 16px 72px;
+    padding: 18px 16px 72px;
   }
   .btn-primary {
     flex: 1;
     justify-content: center;
   }
-  /* declutter on mobile: hide the marketing hero text */
-  .hero-eyebrow,
+  /* declutter on mobile: keep the "my bookmarks" label, drop the big headline */
   .hero-title,
   .hero-sub {
     display: none;
   }
   .hero {
-    margin-bottom: 16px;
+    margin-bottom: 14px;
+    align-items: center;
+  }
+  .hero-eyebrow {
+    margin-bottom: 0;
+  }
+  /* compact one-line count: "8 saved" small */
+  .hero-count {
+    font-size: 12.5px;
+  }
+  .hero-count b {
+    display: inline;
+    font-size: 12.5px;
+    font-weight: 700;
   }
 }
