@@ -24,9 +24,6 @@ const IconTrash = () => (
 const IconFile = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
 );
-const IconRefresh = () => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16" /><path d="M3 21v-5h5" /></svg>
-);
 
 function hostOf(url: string): string {
   try {
@@ -36,7 +33,37 @@ function hostOf(url: string): string {
   }
 }
 
+// Favicons always go through Google's service so the browser never requests
+// internal/LAN hosts directly (avoids Chrome's local-network prompt).
+function googleFavicon(url: string): string {
+  const host = hostOf(url);
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
+}
+
 const looksLikeUrl = (s: string) => /^(https?:\/\/)?[^\s.]+\.[^\s]{2,}/i.test(s.trim());
+
+/* ---------- local cache (single-user, version-gated) ---------- */
+const CACHE_KEY = "ysite-cache-v1";
+type CacheShape = { version: number; bookmarks: Bookmark[]; categories: Category[] };
+
+function readCache(): CacheShape | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (
+      typeof d.version === "number" &&
+      Array.isArray(d.bookmarks) &&
+      Array.isArray(d.categories)
+    ) {
+      return d as CacheShape;
+    }
+  } catch {
+    /* ignore corrupt cache */
+  }
+  return null;
+}
 
 export default function Home() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -46,7 +73,7 @@ export default function Home() {
   const [newCatName, setNewCatName] = useState("");
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dragOverCat, setDragOverCat] = useState<number | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const [version, setVersion] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
@@ -62,7 +89,6 @@ export default function Home() {
   const [draft, setDraft] = useState("");
   const dragDepth = useRef(0);
   const lastFetchedUrl = useRef("");
-  const fetchedMeta = useRef<{ url: string; favicon: string }>({ url: "", favicon: "" });
   // Finder-style "slow double click" detector for renaming.
   const lastTitleClick = useRef<{ id: number | null; t: number }>({ id: null, t: 0 });
 
@@ -71,17 +97,26 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2600);
   }, []);
 
-  /* ---------- load ---------- */
+  // Mutations return the new data version; keep ours in sync so a same-browser
+  // change doesn't trigger a needless full reload next visit.
+  const applyVersion = useCallback((v: unknown) => {
+    if (typeof v === "number") setVersion(v);
+  }, []);
+
+  /* ---------- full load (only on cache miss / version mismatch) ---------- */
   const load = useCallback(async () => {
     try {
-      const [bRes, cRes] = await Promise.all([
+      const [bRes, cRes, vRes] = await Promise.all([
         fetch("/api/bookmarks"),
         fetch("/api/categories"),
+        fetch("/api/version"),
       ]);
       const bData = await bRes.json();
       const cData = await cRes.json();
+      const vData = await vRes.json();
       setBookmarks(bData.bookmarks ?? []);
       setCategories(cData.categories ?? []);
+      setVersion(typeof vData.version === "number" ? vData.version : 0);
     } catch {
       showToast("목록을 불러오지 못했어요");
     } finally {
@@ -89,9 +124,40 @@ export default function Home() {
     }
   }, [showToast]);
 
+  // On mount: render cached data instantly, then check the version (one tiny
+  // read) and only do a full reload if it changed (e.g. edited in another tab).
   useEffect(() => {
-    load();
-  }, [load]);
+    const cached = readCache();
+    if (cached) {
+      setBookmarks(cached.bookmarks);
+      setCategories(cached.categories);
+      setVersion(cached.version);
+      setLoading(false);
+    }
+    (async () => {
+      try {
+        const v = await fetch("/api/version").then((r) => r.json());
+        if (!cached || cached.version !== v.version) await load();
+        else setLoading(false);
+      } catch {
+        if (!cached) setLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist the working set so the next load is instant.
+  useEffect(() => {
+    if (version == null) return;
+    try {
+      localStorage.setItem(
+        CACHE_KEY,
+        JSON.stringify({ version, bookmarks, categories }),
+      );
+    } catch {
+      /* storage full / unavailable — non-fatal */
+    }
+  }, [version, bookmarks, categories]);
 
   /* ---------- auto title fetch (debounced) ---------- */
   useEffect(() => {
@@ -105,7 +171,6 @@ export default function Home() {
       try {
         const res = await fetch(`/api/title?url=${encodeURIComponent(u)}`);
         const data = await res.json();
-        fetchedMeta.current = { url: u, favicon: data.favicon || "" };
         if (!titleTouched && data.title) setTitle(data.title);
       } catch {
         /* ignore — user can type a title manually */
@@ -131,36 +196,40 @@ export default function Home() {
         body: JSON.stringify({
           url: u,
           title: title.trim(),
-          favicon: fetchedMeta.current.url === u ? fetchedMeta.current.favicon : "",
           categoryId: typeof activeCat === "number" ? activeCat : null,
         }),
       });
       if (!res.ok) throw new Error();
+      const data = await res.json();
       setUrl("");
       setTitle("");
       setTitleTouched(false);
       lastFetchedUrl.current = "";
-      await load();
+      if (Array.isArray(data.bookmarks)) {
+        setBookmarks((prev) => [...data.bookmarks, ...prev]);
+      }
+      applyVersion(data.version);
       showToast("즐겨찾기를 추가했어요");
     } catch {
       showToast("추가에 실패했어요");
     } finally {
       setAdding(false);
     }
-  }, [url, title, activeCat, load, showToast]);
+  }, [url, title, activeCat, applyVersion, showToast]);
 
   /* ---------- delete ---------- */
   const remove = useCallback(
     async (id: number) => {
       setBookmarks((prev) => prev.filter((b) => b.id !== id));
       try {
-        await fetch(`/api/bookmarks/${id}`, { method: "DELETE" });
+        const res = await fetch(`/api/bookmarks/${id}`, { method: "DELETE" });
+        applyVersion((await res.json()).version);
       } catch {
         showToast("삭제에 실패했어요");
         load();
       }
     },
-    [load, showToast],
+    [applyVersion, load, showToast],
   );
 
   /* ---------- categories ---------- */
@@ -179,13 +248,14 @@ export default function Home() {
           setCategories((prev) => [...prev, data.category]);
           setActiveCat(data.category.id);
         }
+        applyVersion(data.version);
         setNewCatName("");
         setNewCatOpen(false);
       } catch {
         showToast("카테고리 생성에 실패했어요");
       }
     },
-    [showToast],
+    [applyVersion, showToast],
   );
 
   const deleteCategory = useCallback(
@@ -199,13 +269,14 @@ export default function Home() {
       );
       setActiveCat((cur) => (cur === id ? "all" : cur));
       try {
-        await fetch(`/api/categories/${id}`, { method: "DELETE" });
+        const res = await fetch(`/api/categories/${id}`, { method: "DELETE" });
+        applyVersion((await res.json()).version);
       } catch {
         showToast("카테고리 삭제에 실패했어요");
         load();
       }
     },
-    [showToast, load],
+    [applyVersion, showToast, load],
   );
 
   // Add a category to a bookmark (drag a card onto a category chip).
@@ -221,11 +292,12 @@ export default function Home() {
       );
       if (!changed) return;
       try {
-        await fetch(`/api/bookmarks/${bookmarkId}/categories`, {
+        const res = await fetch(`/api/bookmarks/${bookmarkId}/categories`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ categoryId }),
         });
+        applyVersion((await res.json()).version);
         const name = categories.find((c) => c.id === categoryId)?.name ?? "";
         showToast(`'${name}'(으)로 분류했어요`);
       } catch {
@@ -233,7 +305,7 @@ export default function Home() {
         load();
       }
     },
-    [categories, showToast, load],
+    [categories, applyVersion, showToast, load],
   );
 
   const removeCat = useCallback(
@@ -246,17 +318,18 @@ export default function Home() {
         ),
       );
       try {
-        await fetch(`/api/bookmarks/${bookmarkId}/categories`, {
+        const res = await fetch(`/api/bookmarks/${bookmarkId}/categories`, {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ categoryId }),
         });
+        applyVersion((await res.json()).version);
       } catch {
         showToast("분류 해제에 실패했어요");
         load();
       }
     },
-    [showToast, load],
+    [applyVersion, showToast, load],
   );
 
   /* ---------- rename (inline title edit) ---------- */
@@ -296,31 +369,16 @@ export default function Home() {
           body: JSON.stringify({ title }),
         });
         if (!res.ok) throw new Error();
+        applyVersion((await res.json()).version);
       } catch {
         showToast("이름 변경에 실패했어요");
         load();
       }
     },
-    [draft, showToast, load],
+    [draft, applyVersion, showToast, load],
   );
 
   const cancelEdit = useCallback(() => setEditingId(null), []);
-
-  // Re-fetch every bookmark's real site icon.
-  const refreshIcons = useCallback(async () => {
-    setRefreshing(true);
-    showToast("아이콘 갱신 중…");
-    try {
-      const res = await fetch("/api/bookmarks/refresh-icons", { method: "POST" });
-      const data = await res.json();
-      await load();
-      showToast(`아이콘 ${data.updated ?? 0}/${data.total ?? 0}개 갱신 완료`);
-    } catch {
-      showToast("아이콘 갱신에 실패했어요");
-    } finally {
-      setRefreshing(false);
-    }
-  }, [load, showToast]);
 
   /* ---------- import html files ---------- */
   const importFiles = useCallback(
@@ -364,13 +422,16 @@ export default function Home() {
         });
         if (!res.ok) throw new Error();
         const data = await res.json();
-        await load();
+        if (Array.isArray(data.bookmarks)) {
+          setBookmarks((prev) => [...data.bookmarks, ...prev]);
+        }
+        applyVersion(data.version);
         showToast(`${data.inserted ?? items.length}개를 가져왔어요`);
       } catch {
         showToast("가져오기에 실패했어요 (파일이 너무 클 수 있어요)");
       }
     },
-    [activeCat, load, showToast],
+    [activeCat, applyVersion, showToast],
   );
 
   /* ---------- window drag & drop ---------- */
@@ -617,15 +678,6 @@ export default function Home() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <button
-          className={`icon-refresh${refreshing ? " spinning" : ""}`}
-          onClick={refreshIcons}
-          disabled={refreshing}
-          title="모든 항목의 사이트 아이콘을 다시 찾아 갱신"
-        >
-          <IconRefresh />
-          아이콘 갱신
-        </button>
         <span className="toolbar-label">
           {searchAlt && (
             <span className="trans-badge" title="한↔영 치환 검색 적용됨">
@@ -690,7 +742,11 @@ export default function Home() {
                   <IconTrash />
                 </button>
                 <div className="card-head">
-                  <Favicon src={b.favicon} host={label} isHtml={isHtml} />
+                  <Favicon
+                    src={isHtml ? "" : googleFavicon(b.url)}
+                    host={label}
+                    isHtml={isHtml}
+                  />
                   <div style={{ minWidth: 0 }}>
                     <div className="card-host">
                       {isHtml && <span className="card-tag">HTML</span>}

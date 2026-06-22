@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSchema, getDb, type Bookmark } from "@/lib/db";
-import { faviconFor, fetchPageMeta, normalizeUrl } from "@/lib/metadata";
+import { bumpVersion, ensureSchema, getDb, type Bookmark } from "@/lib/db";
+import { faviconFor, normalizeUrl } from "@/lib/metadata";
 
 type IncomingBookmark = {
   kind?: "link" | "html";
@@ -8,11 +8,7 @@ type IncomingBookmark = {
   title?: string;
   description?: string;
   content?: string;
-  favicon?: string;
 };
-
-const isHttpUrl = (s: unknown): s is string =>
-  typeof s === "string" && /^https?:\/\//i.test(s);
 
 export async function GET() {
   await ensureSchema();
@@ -86,8 +82,9 @@ export async function POST(req: NextRequest) {
         url,
         title: (it.title ?? "").trim(),
         description: (it.description ?? "").trim(),
-        // prefer the icon the client already resolved via /api/title
-        favicon: isHttpUrl(it.favicon) ? it.favicon : "",
+        // Favicons are derived client-side via Google's service (keeps the
+        // browser from hitting internal hosts), so no fetch here.
+        favicon: faviconFor(url),
         content: "",
         created_at: now,
       };
@@ -96,19 +93,6 @@ export async function POST(req: NextRequest) {
 
   if (rows.length === 0) {
     return NextResponse.json({ error: "no valid bookmark" }, { status: 400 });
-  }
-
-  // Single manual add with no client-resolved icon → fetch the site's real
-  // icon server-side. Bulk imports stay fast and fall back to the service.
-  if (rows.length === 1 && rows[0].kind === "link" && !rows[0].favicon) {
-    try {
-      rows[0].favicon = (await fetchPageMeta(rows[0].url)).favicon;
-    } catch {
-      /* fall through to faviconFor below */
-    }
-  }
-  for (const r of rows) {
-    if (r.kind === "link" && !r.favicon) r.favicon = faviconFor(r.url);
   }
 
   const db = getDb();
@@ -120,22 +104,35 @@ export async function POST(req: NextRequest) {
     "write",
   );
 
+  const ids = results.map((r) => Number(r.lastInsertRowid));
+
   // Link the new bookmarks to the active category, if any.
-  if (defaultCat != null) {
-    const ids = results
-      .map((r) => r.lastInsertRowid)
-      .filter((x): x is bigint => x != null)
-      .map((x) => Number(x));
-    if (ids.length > 0) {
-      await db.batch(
-        ids.map((bid) => ({
-          sql: "INSERT OR IGNORE INTO bookmark_categories (bookmark_id, category_id) VALUES (?, ?)",
-          args: [bid, defaultCat],
-        })),
-        "write",
-      );
-    }
+  if (defaultCat != null && ids.length > 0) {
+    await db.batch(
+      ids.map((bid) => ({
+        sql: "INSERT OR IGNORE INTO bookmark_categories (bookmark_id, category_id) VALUES (?, ?)",
+        args: [bid, defaultCat],
+      })),
+      "write",
+    );
   }
 
-  return NextResponse.json({ inserted: rows.length }, { status: 201 });
+  const version = await bumpVersion();
+
+  // Return the created rows so the client can prepend without a full reload.
+  const created: Bookmark[] = rows.map((r, i) => ({
+    id: ids[i],
+    kind: r.kind,
+    url: r.url,
+    title: r.title,
+    description: r.description,
+    favicon: r.favicon,
+    categories: defaultCat != null ? [defaultCat] : [],
+    created_at: r.created_at,
+  }));
+
+  return NextResponse.json(
+    { inserted: rows.length, version, bookmarks: created },
+    { status: 201 },
+  );
 }

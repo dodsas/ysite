@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSchema, getDb } from "@/lib/db";
+import { bumpVersion, ensureSchema, getDb } from "@/lib/db";
 
 // Rename a category.
 export async function PATCH(
@@ -26,7 +26,8 @@ export async function PATCH(
     sql: "UPDATE categories SET name = ? WHERE id = ?",
     args: [name, numId],
   });
-  return NextResponse.json({ id: numId, name });
+  const version = await bumpVersion();
+  return NextResponse.json({ id: numId, name, version });
 }
 
 // Delete a category; its bookmarks fall back to uncategorized.
@@ -50,5 +51,6 @@ export async function DELETE(
     ],
     "write",
   );
-  return NextResponse.json({ deleted: numId });
+  const version = await bumpVersion();
+  return NextResponse.json({ deleted: numId, version });
 }

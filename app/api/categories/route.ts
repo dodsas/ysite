@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSchema, getDb, type Category } from "@/lib/db";
+import { bumpVersion, ensureSchema, getDb, type Category } from "@/lib/db";
 
 export async function GET() {
   await ensureSchema();
@@ -26,5 +26,6 @@ export async function POST(req: NextRequest) {
     sql: "INSERT INTO categories (name, created_at) VALUES (?, ?) RETURNING id, name, created_at",
     args: [name, now],
   });
-  return NextResponse.json({ category: rs.rows[0] }, { status: 201 });
+  const version = await bumpVersion();
+  return NextResponse.json({ category: rs.rows[0], version }, { status: 201 });
 }

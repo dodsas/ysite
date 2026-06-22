@@ -73,6 +73,17 @@ export function ensureSchema(): Promise<void> {
           PRIMARY KEY (bookmark_id, category_id)
         )`,
       );
+      // Single-row data version. Bumped on every write; the client polls it
+      // (one tiny read) and only reloads everything when it changed.
+      await db.execute(
+        `CREATE TABLE IF NOT EXISTS meta (
+          key TEXT PRIMARY KEY,
+          value INTEGER NOT NULL
+        )`,
+      );
+      await db.execute(
+        "INSERT OR IGNORE INTO meta (key, value) VALUES ('version', 1)",
+      );
       // Migrate older tables created before these columns existed.
       for (const col of [
         "kind TEXT NOT NULL DEFAULT 'link'",
@@ -102,4 +113,22 @@ export function ensureSchema(): Promise<void> {
       });
   }
   return schemaReady;
+}
+
+/** Increment and return the data version. Call once per write. */
+export async function bumpVersion(): Promise<number> {
+  const rs = await getDb().execute(
+    `INSERT INTO meta (key, value) VALUES ('version', 1)
+     ON CONFLICT(key) DO UPDATE SET value = value + 1
+     RETURNING value`,
+  );
+  return Number(rs.rows[0]?.value ?? 1);
+}
+
+/** Read the current data version (one-row read). */
+export async function getVersion(): Promise<number> {
+  const rs = await getDb().execute(
+    "SELECT value FROM meta WHERE key = 'version'",
+  );
+  return Number(rs.rows[0]?.value ?? 0);
 }

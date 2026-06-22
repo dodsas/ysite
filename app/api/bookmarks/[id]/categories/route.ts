@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSchema, getDb } from "@/lib/db";
+import { bumpVersion, ensureSchema, getDb } from "@/lib/db";
 
 async function parse(req: NextRequest, idStr: string) {
   const bookmarkId = Number(idStr);
@@ -29,7 +29,8 @@ export async function POST(
     sql: "INSERT OR IGNORE INTO bookmark_categories (bookmark_id, category_id) VALUES (?, ?)",
     args: [parsed.bookmarkId, parsed.categoryId],
   });
-  return NextResponse.json({ ok: true });
+  const version = await bumpVersion();
+  return NextResponse.json({ ok: true, version });
 }
 
 // Remove a category from a bookmark.
@@ -45,5 +46,6 @@ export async function DELETE(
     sql: "DELETE FROM bookmark_categories WHERE bookmark_id = ? AND category_id = ?",
     args: [parsed.bookmarkId, parsed.categoryId],
   });
-  return NextResponse.json({ ok: true });
+  const version = await bumpVersion();
+  return NextResponse.json({ ok: true, version });
 }

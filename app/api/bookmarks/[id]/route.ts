@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSchema, getDb } from "@/lib/db";
+import { bumpVersion, ensureSchema, getDb } from "@/lib/db";
 
 export async function DELETE(
   _req: NextRequest,
@@ -18,7 +18,8 @@ export async function DELETE(
     ],
     "write",
   );
-  return NextResponse.json({ deleted: numId });
+  const version = await bumpVersion();
+  return NextResponse.json({ deleted: numId, version });
 }
 
 // Rename a bookmark / saved page.
@@ -45,5 +46,6 @@ export async function PATCH(
     sql: "UPDATE bookmarks SET title = ? WHERE id = ?",
     args: [body.title.trim(), numId],
   });
-  return NextResponse.json({ id: numId, title: body.title.trim() });
+  const version = await bumpVersion();
+  return NextResponse.json({ id: numId, title: body.title.trim(), version });
 }
