@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ysite",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2024-12-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  }
+  // Secrets (set in the Cloudflare dashboard or via `wrangler secret put`):
+  //   TURSO_URL, TURSO_TOKEN
+  // For Workers Builds (git integration) add them as Build/Runtime variables.
+}
