@@ -18,6 +18,7 @@ export type Bookmark = {
 export type Category = {
   id: number;
   name: string;
+  position: number;
   created_at: number;
 };
 
@@ -107,6 +108,15 @@ export function ensureSchema(): Promise<void> {
           /* column already exists — ignore */
         }
       }
+      // Category ordering (drag to reorder). NULL = unset → seed by id once.
+      try {
+        await db.execute("ALTER TABLE categories ADD COLUMN position INTEGER");
+      } catch {
+        /* already exists */
+      }
+      await db.execute(
+        "UPDATE categories SET position = id WHERE position IS NULL",
+      );
       // Fold any legacy single-category assignments into the join table.
       try {
         await db.execute(

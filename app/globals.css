@@ -443,6 +443,38 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 50%;
+  overflow: hidden;
+}
+.row-cat {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+  border: 1px solid #e2defb;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.row-host {
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+@media (max-width: 560px) {
+  .row-meta {
+    display: none;
+  }
+}
 .row-tag {
   flex-shrink: 0;
   font-size: 10px;
@@ -725,6 +757,14 @@ body {
 .chip.drop-over .chip-count {
   background: rgba(255, 255, 255, 0.25);
   color: #fff;
+}
+/* category chip reorder */
+.chip.cat-dragging {
+  opacity: 0.4;
+}
+.chip.cat-over {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+  border-color: var(--accent);
 }
 .card-del {
   position: absolute;

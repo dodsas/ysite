@@ -46,10 +46,13 @@ const LOCAL_FAVICONS: { test: (host: string) => boolean; src: string }[] = [
   { test: (h) => h.includes("konawiki"), src: "/icons/konawiki.ico" },
 ];
 
-function resolveFavicon(url: string): string {
-  const host = hostOf(url);
+// Prefer the inlined data URI stored on the bookmark (instant, no network);
+// fall back to the bundled intranet icon or the live service URL.
+function iconSrc(b: Bookmark): string {
+  const host = hostOf(b.url);
   for (const f of LOCAL_FAVICONS) if (f.test(host)) return f.src;
-  return googleFavicon(url);
+  if (b.favicon && b.favicon.startsWith("data:")) return b.favicon;
+  return googleFavicon(b.url);
 }
 
 const looksLikeUrl = (s: string) => /^(https?:\/\/)?[^\s.]+\.[^\s]{2,}/i.test(s.trim());
@@ -176,6 +179,9 @@ export default function Home() {
   const [newCatName, setNewCatName] = useState("");
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dragOverCat, setDragOverCat] = useState<number | null>(null);
+  // category chip reorder (drag a chip onto another chip)
+  const [draggingCat, setDraggingCat] = useState<number | null>(null);
+  const [catOverId, setCatOverId] = useState<number | null>(null);
   const [version, setVersion] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [url, setUrl] = useState("");
@@ -510,6 +516,34 @@ export default function Home() {
     [applyVersion, showToast, load],
   );
 
+  // Reorder categories: move `draggedId` to sit before `targetId`.
+  const reorderCategory = useCallback(
+    async (draggedId: number, targetId: number) => {
+      if (draggedId === targetId) return;
+      let order: number[] = [];
+      setCategories((prev) => {
+        const ids = prev.map((c) => c.id).filter((id) => id !== draggedId);
+        const ti = ids.indexOf(targetId);
+        ids.splice(ti < 0 ? ids.length : ti, 0, draggedId);
+        order = ids;
+        const byId = new Map(prev.map((c) => [c.id, c]));
+        return ids.map((id) => byId.get(id)!).filter(Boolean);
+      });
+      try {
+        const res = await fetch("/api/categories/reorder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ order }),
+        });
+        applyVersion((await res.json()).version);
+      } catch {
+        showToast("순서 변경에 실패했어요");
+        load();
+      }
+    },
+    [applyVersion, showToast, load],
+  );
+
   // Add a category to a bookmark (drag a card onto a category chip).
   const addCat = useCallback(
     async (bookmarkId: number, categoryId: number) => {
@@ -703,11 +737,21 @@ export default function Home() {
         }
         applyVersion(data.version);
         showToast(`${data.inserted ?? items.length}개를 가져왔어요`);
+        // Inline imported favicons in the background (batched), then refresh.
+        (async () => {
+          for (let i = 0; i < 30; i++) {
+            const r = await fetch("/api/bookmarks/cache-icons", { method: "POST" })
+              .then((x) => x.json())
+              .catch(() => null);
+            if (!r || !r.remaining) break;
+          }
+          load();
+        })();
       } catch {
         showToast("가져오기에 실패했어요 (파일이 너무 클 수 있어요)");
       }
     },
-    [activeCat, applyVersion, showToast],
+    [activeCat, applyVersion, showToast, load],
   );
 
   /* ---------- window drag & drop ---------- */
@@ -917,22 +961,42 @@ export default function Home() {
         {categories.map((c) => (
           <button
             key={c.id}
+            draggable
             className={`chip${activeCat === c.id ? " active" : ""}${
               draggingId !== null ? " droppable" : ""
-            }${dragOverCat === c.id ? " drop-over" : ""}`}
+            }${dragOverCat === c.id ? " drop-over" : ""}${
+              draggingCat === c.id ? " cat-dragging" : ""
+            }${catOverId === c.id ? " cat-over" : ""}`}
             onClick={() => setActiveCat(c.id)}
+            onDragStart={(e) => {
+              setDraggingCat(c.id);
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("application/x-cat", String(c.id));
+            }}
+            onDragEnd={() => {
+              setDraggingCat(null);
+              setCatOverId(null);
+            }}
             onDragOver={(e) => {
               if (draggingId !== null) {
                 e.preventDefault();
                 setDragOverCat(c.id);
+              } else if (draggingCat !== null && draggingCat !== c.id) {
+                e.preventDefault();
+                setCatOverId(c.id);
               }
             }}
-            onDragLeave={() => setDragOverCat((cur) => (cur === c.id ? null : cur))}
+            onDragLeave={() => {
+              setDragOverCat((cur) => (cur === c.id ? null : cur));
+              setCatOverId((cur) => (cur === c.id ? null : cur));
+            }}
             onDrop={(e) => {
               e.preventDefault();
               e.stopPropagation();
               if (draggingId !== null) addCat(draggingId, c.id);
+              else if (draggingCat !== null) reorderCategory(draggingCat, c.id);
               setDragOverCat(null);
+              setCatOverId(null);
             }}
           >
             {c.name} <span className="chip-count">{counts.get(c.id) ?? 0}</span>
@@ -1108,12 +1172,24 @@ export default function Home() {
                 }}
               >
                 <Favicon
-                  src={isHtml ? "" : resolveFavicon(b.url)}
+                  src={isHtml ? "" : iconSrc(b)}
                   host={label}
                   isHtml={isHtml}
                   compact
                 />
                 <span className="row-title">{b.title || label}</span>
+                {/* extra info — hidden on mobile to keep one tight line */}
+                <span className="row-meta">
+                  {b.categories.map((cid) => {
+                    const c = categories.find((x) => x.id === cid);
+                    return c ? (
+                      <span key={cid} className="row-cat">
+                        {c.name}
+                      </span>
+                    ) : null;
+                  })}
+                  <span className="row-host">{isHtml ? "저장된 페이지" : hostOf(b.url)}</span>
+                </span>
                 {isHtml && <span className="row-tag">HTML</span>}
                 <button
                   className="row-del"
@@ -1177,7 +1253,7 @@ export default function Home() {
                 </button>
                 <div className="card-head">
                   <Favicon
-                    src={isHtml ? "" : resolveFavicon(b.url)}
+                    src={isHtml ? "" : iconSrc(b)}
                     host={label}
                     isHtml={isHtml}
                   />

@@ -4,6 +4,57 @@ export type PageMeta = {
   favicon: string;
 };
 
+/**
+ * Fetch a site's favicon (via Google's service) and inline it as a data URI,
+ * so the client can render it with zero network requests — stored once, reused.
+ * Returns "" on failure (caller falls back to a live URL).
+ */
+export async function fetchFaviconDataUrl(siteUrl: string): Promise<string> {
+  let host: string;
+  try {
+    host = new URL(siteUrl).hostname;
+  } catch {
+    return "";
+  }
+  const url = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return "";
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.length === 0 || buf.length > 100_000) return "";
+    const type = res.headers.get("content-type") || "image/png";
+    let bin = "";
+    for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
+    return `data:${type};base64,${btoa(bin)}`;
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Run async tasks with a concurrency cap. */
+export async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const i = cursor++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker),
+  );
+  return results;
+}
+
 /** Normalize user input into a fetchable absolute URL (adds https:// if missing). */
 export function normalizeUrl(input: string): string | null {
   const raw = input.trim();

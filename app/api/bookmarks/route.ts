@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { bumpVersion, ensureSchema, getDb, type Bookmark } from "@/lib/db";
-import { faviconFor, normalizeUrl } from "@/lib/metadata";
+import {
+  faviconFor,
+  fetchFaviconDataUrl,
+  mapLimit,
+  normalizeUrl,
+} from "@/lib/metadata";
 
 type IncomingBookmark = {
   kind?: "link" | "html";
@@ -82,9 +87,7 @@ export async function POST(req: NextRequest) {
         url,
         title: (it.title ?? "").trim(),
         description: (it.description ?? "").trim(),
-        // Favicons are derived client-side via Google's service (keeps the
-        // browser from hitting internal hosts), so no fetch here.
-        favicon: faviconFor(url),
+        favicon: "", // filled with an inlined data URI below
         content: "",
         created_at: now,
       };
@@ -93,6 +96,20 @@ export async function POST(req: NextRequest) {
 
   if (rows.length === 0) {
     return NextResponse.json({ error: "no valid bookmark" }, { status: 400 });
+  }
+
+  // Inline each link's favicon once (data URI) so the client renders it with
+  // no network request. Only for small adds — large imports would blow the
+  // Workers subrequest cap, so those get the live URL and rely on /cache-icons.
+  const linkCount = rows.filter((r) => r.kind === "link").length;
+  if (linkCount <= 8) {
+    await mapLimit(rows, 8, async (r) => {
+      if (r.kind === "link") {
+        r.favicon = (await fetchFaviconDataUrl(r.url)) || faviconFor(r.url);
+      }
+    });
+  } else {
+    for (const r of rows) if (r.kind === "link") r.favicon = faviconFor(r.url);
   }
 
   const db = getDb();
