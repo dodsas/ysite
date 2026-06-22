@@ -33,11 +33,23 @@ function hostOf(url: string): string {
   }
 }
 
-// Favicons always go through Google's service so the browser never requests
+// Favicons go through Google's service so the browser never requests
 // internal/LAN hosts directly (avoids Chrome's local-network prompt).
 function googleFavicon(url: string): string {
   const host = hostOf(url);
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
+}
+
+// Intranet hosts that public favicon services can't reach: ship the icon as a
+// same-origin static asset (no network request to the LAN host → no prompt).
+const LOCAL_FAVICONS: { test: (host: string) => boolean; src: string }[] = [
+  { test: (h) => h.includes("konawiki"), src: "/icons/konawiki.ico" },
+];
+
+function resolveFavicon(url: string): string {
+  const host = hostOf(url);
+  for (const f of LOCAL_FAVICONS) if (f.test(host)) return f.src;
+  return googleFavicon(url);
 }
 
 const looksLikeUrl = (s: string) => /^(https?:\/\/)?[^\s.]+\.[^\s]{2,}/i.test(s.trim());
@@ -743,7 +755,7 @@ export default function Home() {
                 </button>
                 <div className="card-head">
                   <Favicon
-                    src={isHtml ? "" : googleFavicon(b.url)}
+                    src={isHtml ? "" : resolveFavicon(b.url)}
                     host={label}
                     isHtml={isHtml}
                   />
