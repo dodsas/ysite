@@ -987,6 +987,36 @@ body {
   }
 }
 
+/* ---------- footer ---------- */
+.site-footer {
+  margin-top: 56px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+.footer-sep {
+  opacity: 0.6;
+}
+.footer-commit a {
+  color: var(--ink-soft);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--line);
+  transition: color 0.15s ease;
+}
+.footer-commit a:hover {
+  color: var(--accent);
+}
+.footer-commit code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
 .skeleton-grid .card {
   height: 132px;
   background: linear-gradient(90deg, #fff, #f4f3fb, #fff);
