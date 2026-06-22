@@ -159,6 +159,9 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  const [editingTrans, setEditingTrans] = useState(false);
+  const [transDraft, setTransDraft] = useState("");
+  const transEscRef = useRef(false);
   const dragDepth = useRef(0);
   const lastFetchedUrl = useRef("");
   // Finder-style "slow double click" detector for renaming.
@@ -686,6 +689,30 @@ export default function Home() {
 
   const searchAlt = transMap[search.trim().toLowerCase()] || "";
 
+  // User-curated translation: save the edited word straight into the hash table.
+  const saveTranslation = useCallback(
+    async (q: string, value: string) => {
+      setEditingTrans(false);
+      const key = q.trim().toLowerCase();
+      const v = value.trim().toLowerCase();
+      if (!key) return;
+      if ((transMapRef.current[key] ?? "") === v) return; // unchanged
+      setTransMap((prev) => ({ ...prev, [key]: v }));
+      try {
+        const data = await fetch("/api/translations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entries: [{ q: key, translated: v, hits: 1 }] }),
+        }).then((r) => r.json());
+        if (typeof data.version === "number") setTversion(data.version);
+        showToast("번역을 저장했어요");
+      } catch {
+        showToast("번역 저장에 실패했어요");
+      }
+    },
+    [showToast],
+  );
+
   // Counts per category for the chip badges.
   const counts = useMemo(() => {
     const map = new Map<number | "none", number>();
@@ -706,10 +733,10 @@ export default function Home() {
           <h1 className="hero-title">
             흩어진 링크를 <span className="accent">한 곳에</span>
           </h1>
-          <p className="hero-sub">
-            URL만 붙여넣으면 제목을 자동으로 가져와요. <br/>
-            HTML 파일은 화면에 끌어다 놓기만 하면 됩니다.
-          </p>
+          {/*<p className="hero-sub">*/}
+          {/*  URL만 붙여넣으면 제목을 자동으로 가져와요. <br/>*/}
+          {/*  HTML 파일은 화면에 끌어다 놓기만 하면 됩니다.*/}
+          {/*</p>*/}
         </div>
         <div className="hero-count">
           <b>{bookmarks.length}</b>
@@ -854,11 +881,46 @@ export default function Home() {
           />
         </div>
         <span className="toolbar-label">
-          {searchAlt && (
-            <span className="trans-badge" title="한↔영 치환 검색 적용됨">
-              ↔ {searchAlt}
-            </span>
-          )}
+          {search.trim() &&
+            (editingTrans ? (
+              <input
+                className="trans-edit"
+                autoFocus
+                value={transDraft}
+                placeholder="번역어 입력"
+                onChange={(e) => setTransDraft(e.target.value)}
+                onFocus={(e) => e.currentTarget.select()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    saveTranslation(search.trim().toLowerCase(), transDraft);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    transEscRef.current = true;
+                    setEditingTrans(false);
+                  }
+                }}
+                onBlur={() => {
+                  if (transEscRef.current) {
+                    transEscRef.current = false;
+                    return;
+                  }
+                  saveTranslation(search.trim().toLowerCase(), transDraft);
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="trans-badge"
+                title="클릭해서 번역어 수정 (해시테이블에 저장)"
+                onClick={() => {
+                  setTransDraft(searchAlt);
+                  setEditingTrans(true);
+                }}
+              >
+                ↔ {searchAlt || "번역 추가"}
+              </button>
+            ))}
           {search ? `${filtered.length}개 표시` : `전체 ${bookmarks.length}개`}
         </span>
       </div>
