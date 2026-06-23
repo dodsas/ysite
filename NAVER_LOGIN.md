@@ -157,3 +157,27 @@ curl -i ${LOCAL_ORIGIN}/api/auth/naver
 
 로그인 시작이 `500`이면 `NAVER_CLIENT_ID`가 없는 경우가 많다.
 콜백이 `invalid_state`이면 브라우저 쿠키, redirect URI, 포트가 서로 맞는지 확인한다.
+
+## 7. 세션 유지 정책
+
+세션은 서버에 저장하지 않고 HMAC-SHA256으로 서명한 무상태(stateless) 쿠키(`ysite_auth`)로 발급한다.
+
+- **유효기간: 30일.** `lib/auth.ts`의 `SESSION_TTL_SECONDS`로 정한다.
+- **슬라이딩 갱신.** 로그인한 사용자가 보호 경로에 접근하면 미들웨어가 만료를 다시 30일로 연장한다(`shouldRefreshSession`이 하루 단위로 재발급 제어). 즉 **한 달 이상 미접속**해야만 재로그인이 필요하다.
+- **컴퓨터 재부팅에도 유지.** 쿠키에 `maxAge`가 있어 브라우저/PC를 껐다 켜도 남는 영속 쿠키다.
+- **서버 재배포에도 유지.** 세션을 서버에 저장하지 않으므로 재배포로는 로그아웃되지 않는다. 단, **서명 비밀키가 배포마다 동일해야** 한다.
+
+서명 비밀키는 `lib/auth.ts`의 `getSecret()`이 아래 순서로 찾는다.
+
+```text
+NAVER_SESSION_SECRET → NAVER_CLIENT_SECRET → NAVER_SECRET → NAVER_TOKEN
+```
+
+운영에서는 OAuth Client Secret과 분리해 고정된 임의 문자열을 `NAVER_SESSION_SECRET`으로 두는 것을 권장한다. 이 값을 바꾸면 기존에 발급된 모든 세션이 즉시 무효화되어 전체 사용자가 다시 로그인해야 한다.
+
+```bash
+# 한 번 생성해 고정값으로 등록 (Cloudflare 예시)
+npx wrangler secret put NAVER_SESSION_SECRET
+```
+
+Render에서는 같은 값을 Environment에 등록한다.

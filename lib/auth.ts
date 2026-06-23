@@ -15,7 +15,13 @@ export type AuthSession = {
 
 export const AUTH_COOKIE = "ysite_auth";
 export const NAVER_STATE_COOKIE = "ysite_naver_state";
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 14;
+// Keep a signed-in user logged in for a month of inactivity. The session is a
+// stateless HMAC-signed cookie, so it survives server redeploys (as long as the
+// signing secret is stable) and browser/PC restarts (it is a persistent cookie).
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
+// Re-issue the cookie at most once a day so an active user's 30-day window keeps
+// sliding without setting a cookie on every single request.
+const SESSION_REFRESH_AFTER_SECONDS = 60 * 60 * 24;
 
 export function getNaverRedirectUri(origin: string): string {
   return (
@@ -72,6 +78,13 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 export function sessionMaxAge(): number {
   return SESSION_TTL_SECONDS;
+}
+
+// True once the session is more than a day old, so middleware can slide its
+// expiry forward without re-signing the cookie on every request.
+export function shouldRefreshSession(session: AuthSession): boolean {
+  const issuedAt = session.exp - SESSION_TTL_SECONDS;
+  return Math.floor(Date.now() / 1000) - issuedAt >= SESSION_REFRESH_AFTER_SECONDS;
 }
 
 export async function createSessionCookie(user: AuthUser): Promise<string> {
