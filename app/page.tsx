@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Bookmark, Category } from "@/lib/db";
 import type { AuthUser } from "@/lib/auth";
 import {
@@ -143,6 +150,44 @@ function readCache(userId: string): CacheShape | null {
   return null;
 }
 
+/* ---------- auth cache (skip the login-check spinner on repeat visits) ----- */
+// The session cookie is httpOnly, so the client can't read it directly; it must
+// ask /api/auth/me. We cache the last-known user so repeat visits render the app
+// instantly and revalidate that check in the background instead of blocking on it.
+const AUTH_CACHE_KEY = "ysite-auth-v1";
+function readAuthCache(): AuthUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(AUTH_CACHE_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (d && typeof d.id === "string" && d.id) return d as AuthUser;
+  } catch {
+    /* ignore corrupt cache */
+  }
+  return null;
+}
+function writeAuthCache(user: AuthUser): void {
+  try {
+    localStorage.setItem(AUTH_CACHE_KEY, JSON.stringify(user));
+  } catch {
+    /* non-fatal */
+  }
+}
+function clearAuthCache(): void {
+  try {
+    localStorage.removeItem(AUTH_CACHE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+// Reading localStorage during render would mismatch the prerendered HTML, so we
+// hydrate from cache in a layout effect — it runs after hydration but before the
+// browser paints, swapping the spinner for the cached app with no visible flash.
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
 /* ---------- search similarity ---------- */
 // Strip a simple English plural so "mails" also matches "mail". Fast (string
 // ops only); substring already covers singular→plural the other direction.
@@ -283,20 +328,43 @@ export default function Home() {
     }
   }, [showToast]);
 
-  // On mount: render cached data instantly, then check the version (one tiny
-  // read) and only do a full reload if it changed (e.g. edited in another tab).
+  // Before paint: seed auth + data from cache so a returning user skips the
+  // full-screen "checking login" spinner and the skeleton grid entirely. The
+  // mount effect below still revalidates both in the background.
+  useIsomorphicLayoutEffect(() => {
+    const u = readAuthCache();
+    if (!u) return;
+    setAuthUser(u);
+    setAuthLoading(false);
+    const cached = readCache(u.id);
+    if (cached) {
+      setBookmarks(cached.bookmarks);
+      setCategories(cached.categories);
+      setVersion(cached.version);
+      setLoading(false);
+    }
+  }, []);
+
+  // On mount: render cached data instantly, then revalidate. The auth check and
+  // version poll run in the background — neither blocks the UI, so a returning
+  // user never waits on /api/auth/me + /api/version (the latter can be slow on a
+  // cold worker that re-runs schema setup) before seeing their list.
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const auth = await fetch("/api/auth/me").then((r) => r.json());
         if (!alive) return;
+        // Auth resolved — never block the UI on it past this point.
+        setAuthLoading(false);
         if (!auth.user) {
           setAuthUser(null);
+          clearAuthCache();
           setLoading(false);
           return;
         }
         setAuthUser(auth.user);
+        writeAuthCache(auth.user);
         const cached = readCache(auth.user.id);
         if (cached) {
           setBookmarks(cached.bookmarks);
@@ -305,12 +373,14 @@ export default function Home() {
           setLoading(false);
         }
         const v = await fetch("/api/version").then((r) => r.json());
+        if (!alive) return;
         if (!cached || cached.version !== v.version) await load();
         else setLoading(false);
       } catch {
-        setLoading(false);
-      } finally {
-        if (alive) setAuthLoading(false);
+        if (alive) {
+          setLoading(false);
+          setAuthLoading(false);
+        }
       }
     })();
     return () => {
@@ -919,6 +989,7 @@ export default function Home() {
     setBookmarks([]);
     setCategories([]);
     setVersion(null);
+    clearAuthCache();
     try {
       if (userId) localStorage.removeItem(cacheKeyFor(userId));
     } catch {
