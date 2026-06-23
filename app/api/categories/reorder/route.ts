@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { bumpVersion, ensureSchema, getDb } from "@/lib/db";
+import { getSession } from "@/lib/auth";
+import { bumpVersion, ensureSchema, getDb, userVersionKey } from "@/lib/db";
 
 // Persist a new category order: positions follow the given id sequence.
 export async function POST(req: NextRequest) {
+  const session = await getSession(req);
+  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = session.user.id;
+
   await ensureSchema();
   let body: { order?: unknown };
   try {
@@ -19,11 +24,11 @@ export async function POST(req: NextRequest) {
 
   await getDb().batch(
     order.map((id, i) => ({
-      sql: "UPDATE categories SET position = ? WHERE id = ?",
-      args: [i + 1, id],
+      sql: "UPDATE categories SET position = ? WHERE id = ? AND user_id = ?",
+      args: [i + 1, id, userId],
     })),
     "write",
   );
-  const version = await bumpVersion();
+  const version = await bumpVersion(userVersionKey(userId));
   return NextResponse.json({ version });
 }

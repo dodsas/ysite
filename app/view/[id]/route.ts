@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getSession } from "@/lib/auth";
 import { ensureSchema, getDb } from "@/lib/db";
 
 // Serves a stored standalone HTML page (kind='html') as a real document.
 // Opening this URL in a tab renders the saved page as-is.
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const session = await getSession(req);
+  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = session.user.id;
+
   const { id } = await params;
   const numId = Number(id);
   if (!Number.isInteger(numId)) {
@@ -15,8 +20,8 @@ export async function GET(
 
   await ensureSchema();
   const rs = await getDb().execute({
-    sql: "SELECT content FROM bookmarks WHERE id = ? AND kind = 'html'",
-    args: [numId],
+    sql: "SELECT content FROM bookmarks WHERE id = ? AND user_id = ? AND kind = 'html'",
+    args: [numId, userId],
   });
 
   const content = rs.rows[0]?.content as string | undefined;

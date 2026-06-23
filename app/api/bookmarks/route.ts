@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { bumpVersion, ensureSchema, getDb, type Bookmark } from "@/lib/db";
+import { getSession } from "@/lib/auth";
+import {
+  bumpVersion,
+  ensureSchema,
+  getDb,
+  userVersionKey,
+  type Bookmark,
+} from "@/lib/db";
 import {
   faviconFor,
   fetchFaviconDataUrl,
@@ -15,15 +22,30 @@ type IncomingBookmark = {
   content?: string;
 };
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const session = await getSession(req);
+  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = session.user.id;
+
   await ensureSchema();
   const db = getDb();
   // `content` excluded on purpose — stored pages can be multi-MB.
   const [bRes, linkRes] = await Promise.all([
-    db.execute(
-      "SELECT id, kind, url, title, description, favicon, created_at FROM bookmarks ORDER BY created_at DESC, id DESC",
-    ),
-    db.execute("SELECT bookmark_id, category_id FROM bookmark_categories"),
+    db.execute({
+      sql: `SELECT id, kind, url, title, description, favicon, created_at
+            FROM bookmarks
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC`,
+      args: [userId],
+    }),
+    db.execute({
+      sql: `SELECT bc.bookmark_id, bc.category_id
+            FROM bookmark_categories bc
+            JOIN bookmarks b ON b.id = bc.bookmark_id
+            JOIN categories c ON c.id = bc.category_id
+            WHERE b.user_id = ? AND c.user_id = ?`,
+      args: [userId, userId],
+    }),
   ]);
 
   const cats = new Map<number, number[]>();
@@ -43,6 +65,10 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const session = await getSession(req);
+  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = session.user.id;
+
   await ensureSchema();
 
   let body: unknown;
@@ -62,6 +88,17 @@ export async function POST(req: NextRequest) {
     typeof (body as { categoryId?: unknown }).categoryId === "number"
       ? (body as { categoryId: number }).categoryId
       : null;
+  const db = getDb();
+
+  if (defaultCat != null) {
+    const cat = await db.execute({
+      sql: "SELECT id FROM categories WHERE id = ? AND user_id = ?",
+      args: [defaultCat, userId],
+    });
+    if (!cat.rows[0]) {
+      return NextResponse.json({ error: "invalid category" }, { status: 400 });
+    }
+  }
 
   const now = Date.now();
   const rows = items
@@ -112,11 +149,10 @@ export async function POST(req: NextRequest) {
     for (const r of rows) if (r.kind === "link") r.favicon = faviconFor(r.url);
   }
 
-  const db = getDb();
   const results = await db.batch(
     rows.map((r) => ({
-      sql: "INSERT INTO bookmarks (kind, url, title, description, favicon, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      args: [r.kind, r.url, r.title, r.description, r.favicon, r.content, r.created_at],
+      sql: "INSERT INTO bookmarks (user_id, kind, url, title, description, favicon, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [userId, r.kind, r.url, r.title, r.description, r.favicon, r.content, r.created_at],
     })),
     "write",
   );
@@ -134,7 +170,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const version = await bumpVersion();
+  const version = await bumpVersion(userVersionKey(userId));
 
   // Return the created rows so the client can prepend without a full reload.
   const created: Bookmark[] = rows.map((r, i) => ({

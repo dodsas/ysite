@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Bookmark, Category } from "@/lib/db";
+import type { AuthUser } from "@/lib/auth";
 import {
   htmlTitle,
   isBookmarkExport,
@@ -26,6 +27,9 @@ const IconTrash = () => (
 );
 const IconFile = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+);
+const IconLogout = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /></svg>
 );
 
 function hostOf(url: string): string {
@@ -111,15 +115,19 @@ async function fetchWithProgress(
   return new Blob(chunks as BlobPart[], { type: "text/html" });
 }
 
-/* ---------- local cache (single-user, version-gated) ---------- */
-const CACHE_KEY = "ysite-cache-v1";
+/* ---------- local cache (per-user, version-gated) ---------- */
+const CACHE_KEY_PREFIX = "ysite-cache-v2:";
 const PREFS_KEY = "ysite-prefs-v1"; // UI prefs: composer open, view mode
 type CacheShape = { version: number; bookmarks: Bookmark[]; categories: Category[] };
 
-function readCache(): CacheShape | null {
+function cacheKeyFor(userId: string): string {
+  return `${CACHE_KEY_PREFIX}${userId}`;
+}
+
+function readCache(userId: string): CacheShape | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
+    const raw = localStorage.getItem(cacheKeyFor(userId));
     if (!raw) return null;
     const d = JSON.parse(raw);
     if (
@@ -172,6 +180,8 @@ function readTransCache(): { version: number; map: Record<string, string> } | nu
 }
 
 export default function Home() {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [activeCat, setActiveCat] = useState<number | "all" | "none">("all");
@@ -276,37 +286,52 @@ export default function Home() {
   // On mount: render cached data instantly, then check the version (one tiny
   // read) and only do a full reload if it changed (e.g. edited in another tab).
   useEffect(() => {
-    const cached = readCache();
-    if (cached) {
-      setBookmarks(cached.bookmarks);
-      setCategories(cached.categories);
-      setVersion(cached.version);
-      setLoading(false);
-    }
+    let alive = true;
     (async () => {
       try {
+        const auth = await fetch("/api/auth/me").then((r) => r.json());
+        if (!alive) return;
+        if (!auth.user) {
+          setAuthUser(null);
+          setLoading(false);
+          return;
+        }
+        setAuthUser(auth.user);
+        const cached = readCache(auth.user.id);
+        if (cached) {
+          setBookmarks(cached.bookmarks);
+          setCategories(cached.categories);
+          setVersion(cached.version);
+          setLoading(false);
+        }
         const v = await fetch("/api/version").then((r) => r.json());
         if (!cached || cached.version !== v.version) await load();
         else setLoading(false);
       } catch {
-        if (!cached) setLoading(false);
+        setLoading(false);
+      } finally {
+        if (alive) setAuthLoading(false);
       }
     })();
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Persist the working set so the next load is instant.
   useEffect(() => {
+    if (!authUser) return;
     if (version == null) return;
     try {
       localStorage.setItem(
-        CACHE_KEY,
+        cacheKeyFor(authUser.id),
         JSON.stringify({ version, bookmarks, categories }),
       );
     } catch {
       /* storage full / unavailable — non-fatal */
     }
-  }, [version, bookmarks, categories]);
+  }, [authUser, version, bookmarks, categories]);
 
   /* ---------- translation hash table sync ---------- */
   // keep a ref mirror so unload/timeout handlers read the latest map
@@ -317,6 +342,7 @@ export default function Home() {
   // On mount: hydrate the translation cache from localStorage, then async-load
   // the server table (only replacing when its version changed). Non-blocking.
   useEffect(() => {
+    if (!authUser) return;
     const cached = readTransCache();
     if (cached) {
       setTransMap((prev) => ({ ...cached.map, ...prev }));
@@ -336,7 +362,7 @@ export default function Home() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authUser]);
 
   // Persist the hash table locally whenever it changes.
   useEffect(() => {
@@ -373,6 +399,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!authUser) return;
     const id = window.setInterval(flushTrans, 10 * 60 * 1000);
     // On exit, fire-and-forget via sendBeacon (survives page teardown).
     const onExit = () => {
@@ -402,10 +429,11 @@ export default function Home() {
       window.removeEventListener("pagehide", onExit);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [flushTrans]);
+  }, [authUser, flushTrans]);
 
   /* ---------- auto title fetch (debounced) ---------- */
   useEffect(() => {
+    if (!authUser) return;
     if (titleTouched) return;
     const u = url.trim();
     if (!looksLikeUrl(u) || u === lastFetchedUrl.current) return;
@@ -424,7 +452,7 @@ export default function Home() {
       }
     }, 650);
     return () => window.clearTimeout(t);
-  }, [url, titleTouched]);
+  }, [authUser, url, titleTouched]);
 
   /* ---------- add single ---------- */
   const addBookmark = useCallback(async () => {
@@ -764,6 +792,7 @@ export default function Home() {
 
   /* ---------- window drag & drop ---------- */
   useEffect(() => {
+    if (!authUser) return;
     const onEnter = (e: DragEvent) => {
       if (!e.dataTransfer?.types.includes("Files")) return;
       e.preventDefault();
@@ -797,10 +826,11 @@ export default function Home() {
       window.removeEventListener("dragleave", onLeave);
       window.removeEventListener("drop", onDrop);
     };
-  }, [importFiles]);
+  }, [authUser, importFiles]);
 
   /* ---------- KO<->EN search expansion + hit tracking ---------- */
   useEffect(() => {
+    if (!authUser) return;
     const q = search.trim().toLowerCase();
     if (!q) return;
     const t = window.setTimeout(async () => {
@@ -823,7 +853,7 @@ export default function Home() {
       pendingTrans.current.set(q, { t: translated, hits: (cur?.hits ?? 0) + 1 });
     }, 350);
     return () => window.clearTimeout(t);
-  }, [search]);
+  }, [authUser, search]);
 
   /* ---------- filtered ---------- */
   const filtered = useMemo(() => {
@@ -882,6 +912,54 @@ export default function Home() {
     return map;
   }, [bookmarks]);
 
+  const logout = useCallback(async () => {
+    const userId = authUser?.id;
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
+    setAuthUser(null);
+    setBookmarks([]);
+    setCategories([]);
+    setVersion(null);
+    try {
+      if (userId) localStorage.removeItem(cacheKeyFor(userId));
+    } catch {
+      /* ignore */
+    }
+  }, [authUser]);
+
+  if (authLoading) {
+    return (
+      <main className="wrap auth-wrap">
+        <section className="auth-panel">
+          <span className="hero-eyebrow">ysite</span>
+          <h1 className="hero-title">
+            네이버 로그인 <span className="accent">확인 중</span>
+          </h1>
+          <div className="auth-spinner" aria-label="loading" />
+        </section>
+      </main>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <main className="wrap auth-wrap">
+        <section className="auth-panel">
+          <span className="hero-eyebrow">private bookmarks</span>
+          <h1 className="hero-title">
+            네이버로 로그인하고 <span className="accent">링크를 관리</span>
+          </h1>
+          <p className="auth-copy">
+            로그인 후 저장된 즐겨찾기와 카테고리를 사용할 수 있어요.
+          </p>
+          <a className="naver-login" href="/api/auth/naver">
+            <span className="naver-mark">N</span>
+            네이버 로그인
+          </a>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="wrap">
       <header className="hero">
@@ -895,9 +973,26 @@ export default function Home() {
           {/*  HTML 파일은 화면에 끌어다 놓기만 하면 됩니다.*/}
           {/*</p>*/}
         </div>
-        <div className="hero-count">
-          <b>{bookmarks.length}</b>
-          saved
+        <div className="hero-side">
+          <div className="auth-user">
+            {authUser.profileImage ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={authUser.profileImage} alt="" />
+            ) : (
+              <span>{(authUser.name || authUser.nickname).slice(0, 1)}</span>
+            )}
+            <div>
+              <strong>{authUser.name || authUser.nickname}</strong>
+              <small>{authUser.email || authUser.nickname || "네이버 로그인"}</small>
+            </div>
+            <button type="button" title="로그아웃" onClick={logout}>
+              <IconLogout />
+            </button>
+          </div>
+          <div className="hero-count">
+            <b>{bookmarks.length}</b>
+            saved
+          </div>
         </div>
       </header>
 

@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { bumpVersion, ensureSchema, getDb } from "@/lib/db";
+import { getSession } from "@/lib/auth";
+import { bumpVersion, ensureSchema, getDb, userVersionKey } from "@/lib/db";
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const session = await getSession(req);
+  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = session.user.id;
+
   const { id } = await params;
   const numId = Number(id);
   if (!Number.isInteger(numId)) {
@@ -13,12 +18,16 @@ export async function DELETE(
   await ensureSchema();
   await getDb().batch(
     [
-      { sql: "DELETE FROM bookmark_categories WHERE bookmark_id = ?", args: [numId] },
-      { sql: "DELETE FROM bookmarks WHERE id = ?", args: [numId] },
+      {
+        sql: `DELETE FROM bookmark_categories
+              WHERE bookmark_id IN (SELECT id FROM bookmarks WHERE id = ? AND user_id = ?)`,
+        args: [numId, userId],
+      },
+      { sql: "DELETE FROM bookmarks WHERE id = ? AND user_id = ?", args: [numId, userId] },
     ],
     "write",
   );
-  const version = await bumpVersion();
+  const version = await bumpVersion(userVersionKey(userId));
   return NextResponse.json({ deleted: numId, version });
 }
 
@@ -27,6 +36,10 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const session = await getSession(req);
+  if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const userId = session.user.id;
+
   const { id } = await params;
   const numId = Number(id);
   if (!Number.isInteger(numId)) {
@@ -43,9 +56,9 @@ export async function PATCH(
   }
   await ensureSchema();
   await getDb().execute({
-    sql: "UPDATE bookmarks SET title = ? WHERE id = ?",
-    args: [body.title.trim(), numId],
+    sql: "UPDATE bookmarks SET title = ? WHERE id = ? AND user_id = ?",
+    args: [body.title.trim(), numId, userId],
   });
-  const version = await bumpVersion();
+  const version = await bumpVersion(userVersionKey(userId));
   return NextResponse.json({ id: numId, title: body.title.trim(), version });
 }
