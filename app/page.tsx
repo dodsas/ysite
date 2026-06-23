@@ -232,7 +232,12 @@ export default function Home() {
     try {
       const p = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
       if (typeof p.composerOpen === "boolean") setComposerOpen(p.composerOpen);
-      if (p.viewMode === "list" || p.viewMode === "card") setViewMode(p.viewMode);
+      if (p.viewMode === "list" || p.viewMode === "card") {
+        setViewMode(p.viewMode);
+      } else if (window.matchMedia("(max-width: 560px)").matches) {
+        // No saved preference: default to list view on mobile.
+        setViewMode("list");
+      }
     } catch {
       /* defaults */
     }
