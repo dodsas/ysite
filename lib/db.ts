@@ -204,40 +204,6 @@ export async function upsertUser(user: {
   });
 }
 
-export async function claimLegacyDataForUser(userId: string): Promise<number> {
-  await ensureSchema();
-  const db = getDb();
-  const [bookmarkCount, categoryCount] = await Promise.all([
-    db.execute({
-      sql: "SELECT COUNT(*) AS c FROM bookmarks WHERE user_id = ?",
-      args: [""],
-    }),
-    db.execute({
-      sql: "SELECT COUNT(*) AS c FROM categories WHERE user_id = ?",
-      args: [""],
-    }),
-  ]);
-  const total =
-    Number(bookmarkCount.rows[0]?.c ?? 0) + Number(categoryCount.rows[0]?.c ?? 0);
-  if (total === 0) return 0;
-
-  await db.batch(
-    [
-      {
-        sql: "UPDATE bookmarks SET user_id = ? WHERE user_id = ?",
-        args: [userId, ""],
-      },
-      {
-        sql: "UPDATE categories SET user_id = ? WHERE user_id = ?",
-        args: [userId, ""],
-      },
-    ],
-    "write",
-  );
-  await bumpVersion(userVersionKey(userId));
-  return total;
-}
-
 /** Increment and return a version counter. Call once per write. */
 export async function bumpVersion(key = "version"): Promise<number> {
   const rs = await getDb().execute({

@@ -946,7 +946,9 @@ export default function Home() {
         <section className="auth-panel">
           <span className="hero-eyebrow">private bookmarks</span>
           <h1 className="hero-title">
-            네이버로 로그인하고 <span className="accent">링크를 관리</span>
+            네이버로 로그인하고
+            <br />
+            <span className="accent">링크를 관리</span>
           </h1>
           <p className="auth-copy">
             로그인 후 저장된 즐겨찾기와 카테고리를 사용할 수 있어요.

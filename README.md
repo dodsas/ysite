@@ -60,6 +60,11 @@ npx wrangler secret put TURSO_TOKEN
 4. **Variables & Secrets**에 `TURSO_URL`, `TURSO_TOKEN` 등록
 5. `main`에 push하면 약 90초 내 자동 빌드·배포, PR마다 프리뷰 URL 생성
 
+## 네이버 로그인
+
+네이버 OAuth 설정, 환경변수, Cloudflare/Render 배포 설정은
+[NAVER_LOGIN.md](./NAVER_LOGIN.md)를 참고하세요.
+
 ## 기술 메모
 
 - `@libsql/client/web` 사용이 **필수**입니다. 기본 `@libsql/client`는 네이티브

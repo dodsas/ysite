@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { claimLegacyDataForUser, upsertUser } from "@/lib/db";
+import { upsertUser } from "@/lib/db";
 import {
   AUTH_COOKIE,
   createSessionCookie,
@@ -101,9 +101,6 @@ export async function GET(req: NextRequest) {
   };
 
   await upsertUser(user);
-  if ([user.name, user.nickname].some((v) => v.trim() === "남유선")) {
-    await claimLegacyDataForUser(user.id);
-  }
 
   const res = NextResponse.redirect(new URL("/", origin));
   res.cookies.delete(NAVER_STATE_COOKIE);
