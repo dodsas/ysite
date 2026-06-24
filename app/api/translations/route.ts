@@ -4,8 +4,8 @@ import { bumpVersion, ensureSchema, getDb, getVersion } from "@/lib/db";
 const MAX_ENTRIES = 10000;
 
 // Full translation cache (most-hit first), loaded by the client on startup.
+// No ensureSchema() — this read assumes the schema exists (writes provision it).
 export async function GET() {
-  await ensureSchema();
   const [version, rs] = await Promise.all([
     getVersion("tversion"),
     getDb().execute(

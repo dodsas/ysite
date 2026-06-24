@@ -7,7 +7,6 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const userId = session.user.id;
 
-  await ensureSchema();
   const rs = await getDb().execute({
     sql: `SELECT id, name, position, created_at
           FROM categories

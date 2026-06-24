@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { ensureSchema, getDb } from "@/lib/db";
+import { getDb } from "@/lib/db";
 
 // Serves a stored standalone HTML page (kind='html') as a real document.
 // Opening this URL in a tab renders the saved page as-is.
@@ -18,7 +18,6 @@ export async function GET(
     return NextResponse.json({ error: "invalid id" }, { status: 400 });
   }
 
-  await ensureSchema();
   const rs = await getDb().execute({
     sql: "SELECT content FROM bookmarks WHERE id = ? AND user_id = ? AND kind = 'html'",
     args: [numId, userId],

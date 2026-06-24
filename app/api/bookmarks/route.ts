@@ -27,7 +27,6 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const userId = session.user.id;
 
-  await ensureSchema();
   const db = getDb();
   // `content` excluded on purpose — stored pages can be multi-MB.
   const [bRes, linkRes] = await Promise.all([
