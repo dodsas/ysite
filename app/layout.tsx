@@ -21,17 +21,6 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ko">
-      <head>
-        {/* Runs before hydration: if a session is cached, mark the document so
-            CSS can suppress the prerendered "checking login" splash. Returning
-            (auto-login) users go straight to the app instead of flashing it. */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html:
-              "try{if(localStorage.getItem('ysite-auth-v1'))document.documentElement.classList.add('has-auth')}catch(e){}",
-          }}
-        />
-      </head>
       <body>{children}</body>
     </html>
   );

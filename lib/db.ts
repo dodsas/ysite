@@ -235,3 +235,56 @@ export async function getVersion(key = "version"): Promise<number> {
   });
   return Number(rs.rows[0]?.value ?? 0);
 }
+
+/**
+ * A user's bookmarks (newest first) with their category ids attached. `content`
+ * is excluded — stored pages can be multi-MB and are fetched on demand. Shared
+ * by the GET route and server-side rendering. Assumes the schema exists.
+ */
+export async function listBookmarks(userId: string): Promise<Bookmark[]> {
+  const db = getDb();
+  const [bRes, linkRes] = await Promise.all([
+    db.execute({
+      sql: `SELECT id, kind, url, title, description, favicon, created_at
+            FROM bookmarks
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC`,
+      args: [userId],
+    }),
+    db.execute({
+      sql: `SELECT bc.bookmark_id, bc.category_id
+            FROM bookmark_categories bc
+            JOIN bookmarks b ON b.id = bc.bookmark_id
+            JOIN categories c ON c.id = bc.category_id
+            WHERE b.user_id = ? AND c.user_id = ?`,
+      args: [userId, userId],
+    }),
+  ]);
+
+  const cats = new Map<number, number[]>();
+  for (const row of linkRes.rows as unknown as {
+    bookmark_id: number;
+    category_id: number;
+  }[]) {
+    const list = cats.get(row.bookmark_id) ?? [];
+    list.push(row.category_id);
+    cats.set(row.bookmark_id, list);
+  }
+
+  return (bRes.rows as unknown as Omit<Bookmark, "categories">[]).map((b) => ({
+    ...b,
+    categories: cats.get(b.id) ?? [],
+  }));
+}
+
+/** A user's categories in display order. Shared by the GET route and SSR. */
+export async function listCategories(userId: string): Promise<Category[]> {
+  const rs = await getDb().execute({
+    sql: `SELECT id, name, position, created_at
+          FROM categories
+          WHERE user_id = ?
+          ORDER BY position ASC, id ASC`,
+    args: [userId],
+  });
+  return rs.rows as unknown as Category[];
+}

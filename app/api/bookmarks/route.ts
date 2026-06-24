@@ -4,6 +4,7 @@ import {
   bumpVersion,
   ensureSchema,
   getDb,
+  listBookmarks,
   userVersionKey,
   type Bookmark,
 } from "@/lib/db";
@@ -25,41 +26,7 @@ type IncomingBookmark = {
 export async function GET(req: NextRequest) {
   const session = await getSession(req);
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const userId = session.user.id;
-
-  const db = getDb();
-  // `content` excluded on purpose — stored pages can be multi-MB.
-  const [bRes, linkRes] = await Promise.all([
-    db.execute({
-      sql: `SELECT id, kind, url, title, description, favicon, created_at
-            FROM bookmarks
-            WHERE user_id = ?
-            ORDER BY created_at DESC, id DESC`,
-      args: [userId],
-    }),
-    db.execute({
-      sql: `SELECT bc.bookmark_id, bc.category_id
-            FROM bookmark_categories bc
-            JOIN bookmarks b ON b.id = bc.bookmark_id
-            JOIN categories c ON c.id = bc.category_id
-            WHERE b.user_id = ? AND c.user_id = ?`,
-      args: [userId, userId],
-    }),
-  ]);
-
-  const cats = new Map<number, number[]>();
-  for (const row of linkRes.rows as unknown as {
-    bookmark_id: number;
-    category_id: number;
-  }[]) {
-    const list = cats.get(row.bookmark_id) ?? [];
-    list.push(row.category_id);
-    cats.set(row.bookmark_id, list);
-  }
-
-  const bookmarks = (bRes.rows as unknown as Omit<Bookmark, "categories">[]).map(
-    (b) => ({ ...b, categories: cats.get(b.id) ?? [] }),
-  );
+  const bookmarks = await listBookmarks(session.user.id);
   return NextResponse.json({ bookmarks });
 }
 

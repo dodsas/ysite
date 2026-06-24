@@ -1,20 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { bumpVersion, ensureSchema, getDb, userVersionKey, type Category } from "@/lib/db";
+import { bumpVersion, ensureSchema, getDb, listCategories, userVersionKey } from "@/lib/db";
 
 export async function GET(req: NextRequest) {
   const session = await getSession(req);
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const userId = session.user.id;
 
-  const rs = await getDb().execute({
-    sql: `SELECT id, name, position, created_at
-          FROM categories
-          WHERE user_id = ?
-          ORDER BY position ASC, id ASC`,
-    args: [userId],
-  });
-  return NextResponse.json({ categories: rs.rows as unknown as Category[] });
+  const categories = await listCategories(session.user.id);
+  return NextResponse.json({ categories });
 }
 
 export async function POST(req: NextRequest) {
