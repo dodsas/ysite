@@ -161,6 +161,12 @@ body {
   padding-top: 32px;
   padding-bottom: 32px;
 }
+/* Returning users with a cached session (marked by the pre-hydration script in
+   layout) skip the "checking login" splash entirely — no flash before the app
+   hydrates from cache. */
+html.has-auth .auth-checking {
+  display: none;
+}
 .auth-panel {
   width: min(560px, 100%);
   padding: 36px;

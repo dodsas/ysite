@@ -998,8 +998,10 @@ export default function Home() {
   }, [authUser]);
 
   if (authLoading) {
+    // `auth-checking` lets the pre-hydration script (see layout) hide this for
+    // returning users who have a cached session — they never see a login check.
     return (
-      <main className="wrap auth-wrap">
+      <main className="wrap auth-wrap auth-checking">
         <section className="auth-panel">
           <span className="hero-eyebrow">ysite</span>
           <h1 className="hero-title">
