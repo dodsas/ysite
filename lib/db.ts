@@ -30,6 +30,11 @@ export type StoredUser = {
   nickname: string;
   email: string;
   profile_image: string;
+  // Email-auth users only (NULL for Naver users): password hash + security
+  // question/answer hash for self-serve password reset.
+  password_hash?: string | null;
+  security_question?: string | null;
+  security_answer_hash?: string | null;
   updated_at: number;
 };
 
@@ -56,7 +61,7 @@ export function getDb(): Client {
 // Bump when a new legacy migration is added below. Stored in meta.schema_rev so
 // the one-time ALTER/backfill statements run once per database, not once per
 // cold worker isolate.
-const SCHEMA_REV = 1;
+const SCHEMA_REV = 2;
 
 // Idempotent setup, runnable in a single round trip. Tables carry every current
 // column so a fresh database needs no migration; CREATE IF NOT EXISTS and
@@ -68,6 +73,9 @@ const SCHEMA_STATEMENTS = [
     nickname TEXT NOT NULL DEFAULT '',
     email TEXT NOT NULL DEFAULT '',
     profile_image TEXT NOT NULL DEFAULT '',
+    password_hash TEXT,
+    security_question TEXT,
+    security_answer_hash TEXT,
     updated_at INTEGER NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS bookmarks (
@@ -111,6 +119,7 @@ const SCHEMA_STATEMENTS = [
   )`,
   "CREATE INDEX IF NOT EXISTS idx_bookmarks_user_created ON bookmarks (user_id, created_at DESC, id DESC)",
   "CREATE INDEX IF NOT EXISTS idx_categories_user_position ON categories (user_id, position ASC, id ASC)",
+  "CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)",
 ];
 
 // One-time fixups for databases created before the columns above existed. Each
@@ -148,6 +157,18 @@ async function migrateLegacy(db: Client): Promise<void> {
     );
   } catch {
     /* no legacy category_id column — fine */
+  }
+  // Email-auth columns (rev 2). NULL on existing Naver rows.
+  for (const col of [
+    "password_hash TEXT",
+    "security_question TEXT",
+    "security_answer_hash TEXT",
+  ]) {
+    try {
+      await db.execute(`ALTER TABLE users ADD COLUMN ${col}`);
+    } catch {
+      /* column already exists — ignore */
+    }
   }
 }
 
@@ -287,4 +308,52 @@ export async function listCategories(userId: string): Promise<Category[]> {
     args: [userId],
   });
   return rs.rows as unknown as Category[];
+}
+
+/* ---------- email auth ---------- */
+
+/** Look up an email-auth user (has a password). NULL for unknown/Naver-only. */
+export async function getUserByEmail(email: string): Promise<StoredUser | null> {
+  const rs = await getDb().execute({
+    sql: "SELECT * FROM users WHERE email = ? AND password_hash IS NOT NULL LIMIT 1",
+    args: [email],
+  });
+  return (rs.rows[0] as unknown as StoredUser) ?? null;
+}
+
+export type NewEmailUser = {
+  id: string;
+  email: string;
+  nickname: string;
+  passwordHash: string;
+  securityQuestion: string;
+  securityAnswerHash: string;
+};
+
+/** Create a self-serve (email + password) account. Caller checks email is free. */
+export async function createEmailUser(u: NewEmailUser): Promise<void> {
+  await ensureSchema();
+  await getDb().execute({
+    sql: `INSERT INTO users
+            (id, name, nickname, email, profile_image,
+             password_hash, security_question, security_answer_hash, updated_at)
+          VALUES (?, '', ?, ?, '', ?, ?, ?, ?)`,
+    args: [
+      u.id,
+      u.nickname,
+      u.email,
+      u.passwordHash,
+      u.securityQuestion,
+      u.securityAnswerHash,
+      Date.now(),
+    ],
+  });
+}
+
+/** Set a new password hash (used by security-question reset). */
+export async function updateUserPassword(id: string, passwordHash: string): Promise<void> {
+  await getDb().execute({
+    sql: "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+    args: [passwordHash, Date.now(), id],
+  });
 }

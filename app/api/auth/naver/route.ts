@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getNaverRedirectUri, NAVER_STATE_COOKIE } from "@/lib/auth";
+import { authMode, getNaverRedirectUri, NAVER_STATE_COOKIE } from "@/lib/auth";
 
 function clientId(): string {
   const id = process.env.NAVER_CLIENT_ID;
@@ -14,6 +14,9 @@ function randomState(): string {
 }
 
 export async function GET(req: NextRequest) {
+  if (authMode() !== "naver") {
+    return NextResponse.json({ error: "naver_auth_disabled" }, { status: 404 });
+  }
   const redirectUri = getNaverRedirectUri(req.nextUrl.origin);
   const state = randomState();
   const authUrl = new URL("https://nid.naver.com/oauth2.0/authorize");

@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { AUTH_COOKIE, readSessionCookie } from "@/lib/auth";
+import { AUTH_COOKIE, authMode, readSessionCookie } from "@/lib/auth";
 import { listBookmarks, listCategories, getVersion, userVersionKey } from "@/lib/db";
 import HomeClient from "./home-client";
 
@@ -12,6 +12,8 @@ export default async function Page() {
   const cookieStore = await cookies();
   const session = await readSessionCookie(cookieStore.get(AUTH_COOKIE)?.value);
 
+  const mode = authMode();
+
   if (!session) {
     return (
       <HomeClient
@@ -19,6 +21,7 @@ export default async function Page() {
         initialBookmarks={[]}
         initialCategories={[]}
         initialVersion={null}
+        authMode={mode}
       />
     );
   }
@@ -45,6 +48,7 @@ export default async function Page() {
       initialBookmarks={bookmarks}
       initialCategories={categories}
       initialVersion={version}
+      authMode={mode}
     />
   );
 }

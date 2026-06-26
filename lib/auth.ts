@@ -46,7 +46,7 @@ function bytesToBase64Url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function base64UrlToBytes(value: string): Uint8Array {
+function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
   const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(
     Math.ceil(value.length / 4) * 4,
     "=",
@@ -74,6 +74,58 @@ function timingSafeEqual(a: string, b: string): boolean {
   let out = 0;
   for (let i = 0; i < a.length; i += 1) out |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return out === 0;
+}
+
+// Active auth strategy. The Naver code is kept but only used when AUTH_MODE is
+// explicitly "naver"; otherwise self-serve email signup is used.
+export function authMode(): "email" | "naver" {
+  return process.env.AUTH_MODE === "naver" ? "naver" : "email";
+}
+
+/* ---------- password & security-answer hashing (PBKDF2, Workers-safe) ----- */
+const PBKDF2_ITERATIONS = 100_000;
+
+async function pbkdf2(
+  secret: string,
+  salt: Uint8Array<ArrayBuffer>,
+  iterations: number,
+): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    key,
+    256,
+  );
+  return bytesToBase64Url(new Uint8Array(bits));
+}
+
+// Self-describing string: pbkdf2$<iterations>$<salt>$<hash>. Used for both
+// passwords and security answers (normalize answers with normalizeAnswer first).
+export async function hashSecret(secret: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const hash = await pbkdf2(secret, salt, PBKDF2_ITERATIONS);
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${bytesToBase64Url(salt)}$${hash}`;
+}
+
+export async function verifySecret(secret: string, stored?: string | null): Promise<boolean> {
+  if (!stored) return false;
+  const parts = stored.split("$");
+  if (parts.length !== 4 || parts[0] !== "pbkdf2") return false;
+  const iterations = Number(parts[1]);
+  if (!Number.isFinite(iterations) || iterations <= 0) return false;
+  const hash = await pbkdf2(secret, base64UrlToBytes(parts[2]), iterations);
+  return timingSafeEqual(hash, parts[3]);
+}
+
+// Security answers are matched case-insensitively, ignoring surrounding space.
+export function normalizeAnswer(answer: string): string {
+  return answer.trim().toLowerCase();
 }
 
 export function sessionMaxAge(): number {

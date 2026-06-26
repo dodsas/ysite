@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Bookmark, Category } from "@/lib/db";
 import type { AuthUser } from "@/lib/auth";
+import AuthForm from "./auth-form";
 import {
   htmlTitle,
   isBookmarkExport,
@@ -161,6 +162,7 @@ export type HomeClientProps = {
   initialBookmarks: Bookmark[];
   initialCategories: Category[];
   initialVersion: number | null;
+  authMode: "email" | "naver";
 };
 
 export default function Home({
@@ -168,6 +170,7 @@ export default function Home({
   initialBookmarks,
   initialCategories,
   initialVersion,
+  authMode,
 }: HomeClientProps) {
   // Initial state comes from the server render (see app/page.tsx), so the very
   // first paint already shows the user's data — no auth-check splash, no flash.
@@ -882,6 +885,7 @@ export default function Home({
   }, []);
 
   if (!authUser) {
+    if (authMode === "email") return <AuthForm />;
     return (
       <main className="wrap auth-wrap">
         <section className="auth-panel">
