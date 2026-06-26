@@ -17,6 +17,21 @@ function gitCommit(): string {
   }
 }
 
+// Last deploy time ≈ build time. Format it here (Node has full ICU) so the
+// inlined value is the final KST display string — the client just prints it,
+// avoiding any runtime Intl/timezone differences between server and browser.
+function buildTime(): string {
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date());
+}
+
 const nextConfig: NextConfig = {
   // @libsql/client/web is pure-JS over fetch; keep it external so the
   // bundler doesn't try to pull native bindings into the worker.
@@ -24,6 +39,8 @@ const nextConfig: NextConfig = {
   // Inlined into the client bundle at build time.
   env: {
     NEXT_PUBLIC_GIT_COMMIT: gitCommit(),
+    // KST display string for the last deploy time (a build runs on each deploy).
+    NEXT_PUBLIC_BUILD_TIME: buildTime(),
   },
 };
 
